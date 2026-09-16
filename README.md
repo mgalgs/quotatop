@@ -1,0 +1,220 @@
+# quotatop
+
+Live quota for your AI coding agents, in one terminal window.
+
+```
+▌ QUOTATOP  host                                                                                              Wed 9:03:25 AM   ↻ 19s
+
+╭─ CLAUDE ──────────────────────────────────────────────────────╮  ╭─ CODEX ──────────────────────────────────────────────── team ─╮
+│ 5-hour                                                    31% │  │ 5-hour                                                    85% │
+│ ██████████████████▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │  │ ███████████████████████████████████████████████████▌░░░░░░░░░ │
+│ resets in 36m 34s                                             │  │ resets in 2h 07m                                              │
+│                                                               │  │                                                               │
+│ Weekly                                                    68% │  │ Weekly                                                    49% │
+│ █████████████████████████████████████████▌░░░░░░░░░░░░░░░░░░░ │  │ █████████████████████████████▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │
+│ in 4d 10h · +1.1%/h avg → full in 1d 4h (3d 6h short)         │  │ in 5d 11h · +1.4%/h avg → full in 1d 13h (3d 21h short)       │
+│                                                               │  ╰─ reported 3s ago ───────────────────────────── local · extra ─╯
+│ Weekly · Fable                                            28% │                                                                   
+│ █████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │                                                                   
+│ in 4d 10h · +0.5%/h avg → ~77% at reset (2d 2h spare)         │                                                                   
+╰─ fetched 31s ago ─────────────────────── account · 10m cache ─╯                                                                   
+
+r refresh · R force-fresh · ? keys · q quit                                                                tightest codex 5-hour 85%
+```
+
+(Shown without colour. In a colour terminal each gauge is a green-to-red
+gradient, the unfilled part is the same gradient darkened, and a bar creeping
+into the red end reads at a glance without looking at the number.)
+
+## Running it
+
+```bash
+quotatop
+```
+
+Give it its own tmux window and leave it there.
+
+| Key | Does |
+|-----|------|
+| `r` | refresh both sources now |
+| `R` | refresh Claude past its 10-minute cache (a real API call) |
+| `?` | toggle the key list and data-source notes |
+| `q` / `esc` / `ctrl-c` | quit |
+
+| Flag | Does |
+|------|------|
+| `--interval 20s` | how often to poll both sources |
+| `--snapshot` | render one frame to stdout and exit — no TUI |
+| `--json` | write one JSON document to stdout and exit — no TUI |
+| `--width N` | width for `--snapshot` (0 detects the terminal, falls back to the widest layout) |
+| `--fresh` | bypass the Claude cache on the first read |
+| `--no-history` | do not read or write the trend file |
+
+`--snapshot` honours `NO_COLOR` and `CLICOLOR_FORCE`, so it is also the way to
+check a rendering change without driving a terminal.
+
+The detail line sheds its least important part rather than being cut off
+mid-word — the absolute reset time goes first, then the reset-gap parenthetical
+described below. The full reading needs roughly 110 columns in the side-by-side
+layout; below that you still get the projection, just less of its context.
+
+## What it reads
+
+Directly, in this process — the binary is self-contained and shells out to
+nothing:
+
+- **Claude** — the OAuth token from `~/.claude/.credentials.json`, then a GET
+  to the usage endpoint (`api.anthropic.com/api/oauth/usage`), cached for 10
+  minutes in `~/.cache/quotatop/claude-quota.json`. The panel reports when the
+  numbers were *observed* (from the cache stamp), not when it asked, so a
+  cached reading cannot look fresher than it is.
+- **Codex** — the local session logs, walked recursively from `$CODEX_HOME`
+  (or `~/.codex`) plus `/sessions`, for the newest recorded rate limits. There
+  is no server to ask: Codex only knows its limits when it reports them, which
+  is why that panel can be minutes or hours stale and says so.
+
+> **Both of these are undocumented and can change without notice.** Neither the
+> OAuth usage endpoint nor the shape of the Codex session log is a public
+> interface, and neither vendor owes this tool stability. If a panel starts
+> reporting an error after an update, that is the most likely reason.
+
+A source that fails turns into a red panel with the error in it; the other
+panel keeps running.
+
+## Configuration
+
+Every setting is an environment variable, and the config file supplies defaults
+for the same names — so there is one list to learn, and anything added later
+works in both places. The environment always wins over the file.
+
+The file is read from the first of:
+
+1. `$QUOTATOP_CONFIG`
+2. `$XDG_CONFIG_HOME/quotatop/config`
+3. `~/.config/quotatop/config`
+
+Format is `KEY=VALUE`, one per line. `#` starts a comment, blank lines are
+skipped, a value may contain `=`, and a value wrapped in matching quotes is
+unquoted. A leading `~/` expands to your home directory. Nothing else is
+interpreted — no escapes, no variable expansion, no command substitution. A
+missing or malformed file is not an error: a monitor has to start.
+
+```ini
+# ~/.config/quotatop/config
+QUOTATOP_CODEX_ROOTS = ~/work/agent-runs/*/codex-sessions:~/.codex-archive
+```
+
+| Setting | Does |
+|---------|------|
+| `QUOTATOP_CODEX_ROOTS` | extra Codex session roots (see below) |
+| `QUOTATOP_CLAUDE_CREDENTIALS` | override the path to `.credentials.json` |
+| `QUOTATOP_HISTORY` | override the trend file's location |
+| `QUOTATOP_CONFIG` | override the config file's location |
+
+`QUOTATOP_CODEX_ROOTS` is a `:`-separated list of paths, each expanded as a
+shell-style glob, each match walked like the default root. It exists so
+sessions that only live outside `~/.codex` are still found — containerised or
+sandboxed runs, or an archive of older logs. A leading `~/` is expanded in each
+element, not just the first, so a home-relative second root works. A pattern
+matching nothing is ignored.
+
+## Trend and burn rate
+
+Every percentage change is appended to `~/.cache/quotatop/history.jsonl`
+(override with `QUOTATOP_HISTORY`, disable with `--no-history`). That file is
+what makes the sparkline and the burn rate work on the first frame after a
+restart instead of an hour later.
+
+The rate comes from one of two models. Long windows (24h or more) are projected
+from their own elapsed pace — the current percentage divided by the hours since
+the window opened — because a weekly window's elapsed time already contains the
+nights and days away from the keyboard, and extrapolating a working-hours slope
+across mostly-sleep time overstates the burn; these are labelled `avg`. Shorter
+windows keep the live slope, fitted over the samples since the window last
+reset — a reset is a sharp drop, and averaging across one would report a
+meaningless negative burn.
+
+Either way the result is `→ ~38% at reset`, or a red `→ full in 1d 7h` when the
+window will not survive the pace. Where there is a reset deadline to measure
+against, the forecast also carries the gap between the two:
+
+- `→ full in 2d 6h (2d 14h short)` — you run out two and a half days *before*
+  the window resets.
+- `→ ~72% at reset (1d 2h spare)` — the pace would only reach 100% a day after
+  the reset arrives, so it never gets there.
+
+`short` therefore only ever appears on a red line and `spare` only on a
+survivable one; both are computed from the same crossing time as the headline
+and cannot disagree with it.
+
+Rates are a prompt to look, not a forecast.
+
+## JSON output
+
+`--json` writes one document to stdout and exits, for status lines, hooks and
+anything else that wants the numbers without a terminal:
+
+```bash
+quotatop --json | jq '.sources[] | select(.source=="claude") | .windows[]
+                      | select(.key=="weekly_all") | .percent'
+```
+
+The document is versioned (`"schema": 1`) and stable. Two rules for consumers:
+
+- **Iterate windows and match on `key`; never index by position.** A source can
+  gain or lose a window — `weekly_scoped` only exists while a model-scoped
+  weekly bar is active.
+- **`projection` is always an object, never null.** Check `valid` before
+  reading the rest of it.
+
+Window keys are `session`, `weekly_all` and `weekly_scoped` for Claude, and
+`primary` and `secondary` for Codex. Reset times come with a precomputed
+`resets_in_seconds`, and readings with an `observed_age_seconds`, so a shell
+consumer never has to parse a timestamp. A failing source reports its `error`
+in-band and the other source is still present, so the document is always
+complete.
+
+The projection carries `full_at` (when the pace reaches 100%, reset or no
+reset), `gap_seconds` (negative when the window empties before it resets — the
+`short` case above, positive for `spare`) and `exhausts_before_reset`.
+
+`--json` records a trend sample like the TUI does, so a status line refreshing
+on a timer keeps the history useful. Writers serialize on a lock file beside
+the history, and a compaction always re-reads under that lock, so several
+processes writing at once cannot drop each other's samples. Pass `--no-history`
+to read and write nothing.
+
+## Platform support
+
+**Linux is what this is tested on.** The Claude reader expects the OAuth token
+in `~/.claude/.credentials.json`.
+
+**macOS is not supported yet.** Claude Code stores that credential in the
+Keychain there, not in a file, so the Claude panel will report an error. Two
+ways forward, and PRs are welcome for either:
+
+- Export the token to a JSON file of the same shape and point
+  `QUOTATOP_CLAUDE_CREDENTIALS` at it. That path exists precisely for this.
+- Add a proper Keychain reader. This has deliberately *not* been shipped
+  untested — there is no Mac here to verify it on, and a credential path that
+  silently reads the wrong thing is worse than one that is plainly absent.
+
+The Codex reader is filesystem-only and works anywhere Go does.
+
+## Development
+
+```bash
+go test ./...        # layout invariants, history round-trip, projection maths
+go build -o quotatop .
+```
+
+Dependencies are vendored, so both work with no network and no module cache.
+After changing a dependency, re-run `go mod vendor` and commit `vendor/`.
+
+The tests assert that every rendered panel is an exact rectangle of the width it
+was asked for — misaligned borders are the classic TUI regression, and they are
+easy to introduce with a glyph whose display width is not one cell.
+
+## Licence
+
+See [LICENSE](LICENSE).
