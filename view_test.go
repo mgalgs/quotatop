@@ -740,7 +740,7 @@ func TestProjectionTextLabelsSustainedRate(t *testing.T) {
 	now := time.Now()
 	sustained := Projection{RatePerHour: 1.0, AtReset: 168, ExhaustAt: now.Add(59 * time.Hour),
 		Valid: true, Sustained: true}
-	text, _, urgent := projectionText(sustained, now.Add(127*time.Hour), now)
+	text, _, urgent := projectionText(sustained, now.Add(127*time.Hour), 168*time.Hour, now)
 	if !urgent {
 		t.Error("sustained exhaustion should render as urgent")
 	}
@@ -748,7 +748,7 @@ func TestProjectionTextLabelsSustainedRate(t *testing.T) {
 		t.Errorf("sustained rate text = %q, want the 'avg' marker", text)
 	}
 	live := Projection{RatePerHour: 1.0, AtReset: 60, Valid: true}
-	if text, _, _ := projectionText(live, time.Time{}, now); strings.Contains(text, "avg") {
+	if text, _, _ := projectionText(live, time.Time{}, 168*time.Hour, now); strings.Contains(text, "avg") {
 		t.Errorf("live rate text = %q must not carry the 'avg' marker", text)
 	}
 }
@@ -849,7 +849,7 @@ func TestProjectionTextGap(t *testing.T) {
 	// Short: full in 54h, reset 116h away → 62h = 2d 14h short.
 	short := Projection{RatePerHour: 0.9, AtReset: 127, ExhaustAt: now.Add(54 * time.Hour),
 		FullAt: now.Add(54 * time.Hour), Valid: true, Sustained: true}
-	text, gap, urgent := projectionText(short, now.Add(116*time.Hour), now)
+	text, gap, urgent := projectionText(short, now.Add(116*time.Hour), 168*time.Hour, now)
 	if !urgent {
 		t.Error("short case should render as urgent")
 	}
@@ -863,7 +863,7 @@ func TestProjectionTextGap(t *testing.T) {
 	// Spare: full in 95h, reset 87h away → 8h spare, headline still at-reset.
 	spare := Projection{RatePerHour: 0.5, AtReset: 72, FullAt: now.Add(95 * time.Hour),
 		Valid: true, Sustained: true}
-	text, gap, urgent = projectionText(spare, now.Add(87*time.Hour), now)
+	text, gap, urgent = projectionText(spare, now.Add(87*time.Hour), 168*time.Hour, now)
 	if urgent {
 		t.Error("spare case must not render as urgent")
 	}
@@ -875,12 +875,42 @@ func TestProjectionTextGap(t *testing.T) {
 	}
 
 	// No reset deadline to measure against.
-	if _, gap, _ = projectionText(short, time.Time{}, now); gap != "" {
+	if _, gap, _ = projectionText(short, time.Time{}, 168*time.Hour, now); gap != "" {
 		t.Errorf("gap = %q with an unknown reset, want empty", gap)
 	}
 	// Deadlines a hair apart are noise.
-	if _, gap, _ = projectionText(short, short.FullAt.Add(30*time.Second), now); gap != "" {
+	if _, gap, _ = projectionText(short, short.FullAt.Add(30*time.Second), 168*time.Hour, now); gap != "" {
 		t.Errorf("gap = %q with deadlines under a minute apart, want empty", gap)
+	}
+}
+
+// A gap bigger than a whole window (several more windows would have to pass
+// before the pace ran dry or came in with room to spare) is not a useful
+// reading, so it is suppressed -- but the headline itself must survive.
+func TestProjectionTextSuppressesGapBeyondAWindowLength(t *testing.T) {
+	now := time.Now()
+	weekly := 168 * time.Hour
+	resetsAt := now.Add(20 * time.Hour)
+
+	// 190h gap on a 168h window: suppressed.
+	huge := Projection{RatePerHour: 0.5, AtReset: 90, FullAt: now.Add(210 * time.Hour), Valid: true}
+	text, gap, _ := projectionText(huge, resetsAt, weekly, now)
+	if gap != "" {
+		t.Errorf("gap = %q for a 190h gap on a 168h window, want suppressed", gap)
+	}
+	if text == "" {
+		t.Error("headline text must survive even when the gap is suppressed")
+	}
+
+	// 167h gap on a 168h window: still under a window length, so it renders.
+	justUnder := Projection{RatePerHour: 0.5, AtReset: 90, FullAt: now.Add(187 * time.Hour), Valid: true}
+	if _, gap, _ := projectionText(justUnder, resetsAt, weekly, now); gap == "" {
+		t.Error("gap just under a window length was suppressed, want it kept")
+	}
+
+	// windowLength of 0 means unknown -- never suppress.
+	if _, gap, _ := projectionText(huge, resetsAt, 0, now); gap == "" {
+		t.Error("gap = empty with windowLength 0, want no suppression")
 	}
 }
 
