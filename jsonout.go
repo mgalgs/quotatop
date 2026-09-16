@@ -23,6 +23,7 @@ type jsonSource struct {
 	ObservedAgeSeconds *int64       `json:"observed_age_seconds"`
 	Warning            string       `json:"warning"`
 	Error              string       `json:"error"`
+	LimitReached       string       `json:"limit_reached,omitempty"`
 	Windows            []jsonWindow `json:"windows"`
 }
 
@@ -34,6 +35,7 @@ type jsonWindow struct {
 	ResetsInSeconds *int64         `json:"resets_in_seconds"`
 	WindowSeconds   *int64         `json:"window_seconds"`
 	Note            string         `json:"note"`
+	Expired         bool           `json:"expired,omitempty"`
 	Projection      jsonProjection `json:"projection"`
 }
 
@@ -84,12 +86,13 @@ func sourceTitle(source string) string {
 
 func encodeJSONSource(snap Snapshot, history *History, now time.Time) jsonSource {
 	source := jsonSource{
-		Source:  snap.Source,
-		Title:   snap.Title,
-		Plan:    snap.Chip,
-		Verb:    snap.Verb,
-		Warning: snap.Warning,
-		Windows: make([]jsonWindow, 0),
+		Source:       snap.Source,
+		Title:        snap.Title,
+		Plan:         snap.Chip,
+		Verb:         snap.Verb,
+		Warning:      snap.Warning,
+		LimitReached: snap.LimitReached,
+		Windows:      make([]jsonWindow, 0),
 	}
 	if !snap.Observed.IsZero() {
 		observedAt := jsonTime(snap.Observed)
@@ -113,12 +116,21 @@ func encodeJSONSource(snap Snapshot, history *History, now time.Time) jsonSource
 }
 
 func encodeJSONWindow(source string, window Window, history *History, now time.Time) jsonWindow {
+	// A projection is itself a percentage claim, so it is withheld for an
+	// expired window the same way view.go withholds the gauge and the
+	// percent text -- a forecast derived from a discarded reading is worse
+	// than no forecast.
+	projection := jsonProjection{}
+	if !window.Expired {
+		projection = encodeJSONProjection(history.Project(source, window, now), window.ResetsAt)
+	}
 	encoded := jsonWindow{
 		Key:        window.Key,
 		Label:      window.Label,
 		Percent:    window.Percent,
 		Note:       window.Note,
-		Projection: encodeJSONProjection(history.Project(source, window, now), window.ResetsAt),
+		Expired:    window.Expired,
+		Projection: projection,
 	}
 	if !window.ResetsAt.IsZero() {
 		resetsAt := jsonTime(window.ResetsAt)

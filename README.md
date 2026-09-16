@@ -167,6 +167,19 @@ The document is versioned (`"schema": 1`) and stable. Two rules for consumers:
 - **`projection` is always an object, never null.** Check `valid` before
   reading the rest of it.
 
+A window's `expired` (bool, omitted when false) means the reading is older
+than the window it describes — the window has certainly reset since this
+percentage was observed. `percent` and `projection` still carry the last
+known numbers for reference, but they describe a window that is gone;
+`projection.valid` is always `false` when `expired` is `true`. A consumer
+that cares about the *current* state should skip a window's `percent` when
+`expired` is set rather than treat it as live.
+
+A source's `limit_reached` (string, omitted when empty) carries the reason
+the account is refusing work — for example
+`workspace_member_usage_limit_reached` — when the source itself has reported
+a block, independent of any single window's percentage.
+
 Window keys are `session`, `weekly_all` and `weekly_scoped` for Claude, and
 `primary` and `secondary` for Codex. Reset times come with a precomputed
 `resets_in_seconds`, and readings with an `observed_age_seconds`, so a shell

@@ -23,21 +23,34 @@ type Window struct {
 	ResetsAt time.Time
 	Length   time.Duration // how long the window lasts, for the sustained burn model
 	Note     string        // shown under the bar when something needs saying
+	Expired  bool          // the reading is older than the window it describes
+}
+
+// windowExpired reports whether a window's own length means the reading no
+// longer describes the live window: the observation is old enough that the
+// window has reset since it was taken. A window with no known length is
+// never expired.
+func windowExpired(length time.Duration, observed, now time.Time) bool {
+	if length <= 0 {
+		return false
+	}
+	return now.Sub(observed) >= length
 }
 
 // Snapshot is everything one source knows right now.
 type Snapshot struct {
-	Source   string // "claude" or "codex"
-	Title    string
-	Chip     string // plan or similar, shown in the panel's top-right
-	Windows  []Window
-	Observed time.Time // when the data itself was observed, not when we asked
-	Verb     string    // "fetched" / "reported"
-	Footnote string
-	Detail   string
-	Warning  string // panel-level caution, shown once under the windows
-	Err      error
-	At       time.Time // when this snapshot was produced
+	Source       string // "claude" or "codex"
+	Title        string
+	Chip         string // plan or similar, shown in the panel's top-right
+	Windows      []Window
+	Observed     time.Time // when the data itself was observed, not when we asked
+	Verb         string    // "fetched" / "reported"
+	Footnote     string
+	Detail       string
+	Warning      string // panel-level caution, shown once under the windows
+	LimitReached string // reason the account is refusing work, "" when not blocked
+	Err          error
+	At           time.Time // when this snapshot was produced
 }
 
 // --- Claude ---------------------------------------------------------------
@@ -296,9 +309,11 @@ func (s claudeSource) withPayload(snap Snapshot, payload claudePayload) Snapshot
 				label += " · " + *limit.Scope.Surface
 			}
 		}
+		length := claudeWindowLengths[limit.Kind]
 		snap.Windows = append(snap.Windows, Window{
 			Key: limit.Kind, Label: label, Percent: *limit.Percent,
-			ResetsAt: parseISO(limit.ResetsAt), Length: claudeWindowLengths[limit.Kind],
+			ResetsAt: parseISO(limit.ResetsAt), Length: length,
+			Expired: windowExpired(length, snap.Observed, snap.At),
 		})
 	}
 	// Older payloads carried only the two named buckets, with no limits[].
@@ -312,6 +327,7 @@ func (s claudeSource) withPayload(snap Snapshot, payload claudePayload) Snapshot
 			}
 			window := Window{Key: bucket.key, Label: bucket.label, Percent: *bucket.data.Utilization,
 				Length: claudeWindowLengths[bucket.key]}
+			window.Expired = windowExpired(window.Length, snap.Observed, snap.At)
 
 			if bucket.data.ResetsAt != nil {
 				window.ResetsAt = parseISO(*bucket.data.ResetsAt)
@@ -336,10 +352,11 @@ type codexRLWindow struct {
 }
 
 type codexRateLimits struct {
-	LimitID   *string        `json:"limit_id"`
-	PlanType  *string        `json:"plan_type"`
-	Primary   *codexRLWindow `json:"primary"`
-	Secondary *codexRLWindow `json:"secondary"`
+	LimitID              *string        `json:"limit_id"`
+	PlanType             *string        `json:"plan_type"`
+	Primary              *codexRLWindow `json:"primary"`
+	Secondary            *codexRLWindow `json:"secondary"`
+	RateLimitReachedType *string        `json:"rate_limit_reached_type"`
 }
 
 // codexRow is one line of a session log. Only token_count rows carrying rate
@@ -373,6 +390,15 @@ type codexSource struct {
 // blocked goroutine per timeout -- and would only convert slow-but-fine scans
 // into total failures that drop the last good reading.
 const codexScanTimeout = 25 * time.Second
+
+// codexReachedStaleAfter bounds how long a rate_limit_reached_type signal is
+// still taken at face value. 168h is the weekly window, the longest length
+// Codex is known to report in practice; past that, whatever window produced
+// the block has certainly reset even without a fresher row around to confirm
+// it. This is an empirical bound, not a guarantee from the schema: the
+// default case below labels arbitrary window_minutes values, so a longer
+// window is not structurally impossible, just not one this scanner has seen.
+const codexReachedStaleAfter = 168 * time.Hour
 
 // defaultCodexSource works out the roots from the environment.
 func defaultCodexSource() codexSource {
@@ -421,13 +447,15 @@ func fetchCodex() Snapshot { return defaultCodexSource().fetch() }
 
 // codexReport is the newest usage row seen so far and where it came from.
 type codexReport struct {
-	timestamp time.Time
-	path      string
-	root      string // "interactive" or "extra"; goes into the footnote
-	planType  string
-	primary   *codexRLWindow
-	secondary *codexRLWindow
-	scanErr   error // the first file with a genuine read error (I/O, permissions), if any
+	timestamp   time.Time
+	path        string
+	root        string // "interactive" or "extra"; goes into the footnote
+	planType    string
+	primary     *codexRLWindow
+	secondary   *codexRLWindow
+	scanErr     error     // the first file with a genuine read error (I/O, permissions), if any
+	reachedType string    // newest non-empty rate_limit_reached_type seen, "" if none
+	reachedAt   time.Time // timestamp of the row reachedType came from
 }
 
 // consider upgrades the running best when the row is a usage report and is at
@@ -440,6 +468,37 @@ func (r *codexReport) consider(row codexRow, path, root string) {
 	if rl == nil {
 		return
 	}
+	// Parsed once, above the early returns that need it: a row whose
+	// timestamp does not parse is skipped entirely, since with a zero time it
+	// would beat every older dated row and its reading would be reported as
+	// "just now" no matter how old it actually is.
+	timestamp, err := time.Parse(time.RFC3339, row.Timestamp)
+	if err != nil {
+		return
+	}
+	// A blocked signal is captured before the limit_id filter below rejects
+	// the row: the reached-type row is routinely a "premium" limit_id row
+	// with both windows null, which must still be rejected for percentage
+	// purposes but which is exactly the row that says the account is
+	// blocked.
+	if rl.RateLimitReachedType != nil && *rl.RateLimitReachedType != "" {
+		if !timestamp.Before(r.reachedAt) {
+			r.reachedType = *rl.RateLimitReachedType
+			r.reachedAt = timestamp
+		}
+	} else if timestamp.After(r.reachedAt) {
+		// A row with rate limits but no reached type is the log's ordinary
+		// way of saying the account is not (or no longer) blocked. It must
+		// win over a strictly older blocked row, or a block can never clear
+		// once a row that carries it is followed only by unblocked rows on
+		// non-"codex" limit_ids. A tie is left alone rather than treated as
+		// clearing evidence: consider() only sees one row at a time, so a
+		// tie carries no ordering information about which row is the "real"
+		// state at that instant, and TestCodexBlockSurvivesReplacementByATiedNormalRow
+		// pins a tied normal row to not clear a same-instant block.
+		r.reachedType = ""
+		r.reachedAt = timestamp
+	}
 	if rl.LimitID != nil && *rl.LimitID != "codex" {
 		return
 	}
@@ -447,21 +506,17 @@ func (r *codexReport) consider(row codexRow, path, root string) {
 		(rl.Secondary == nil || rl.Secondary.UsedPercent == nil) {
 		return
 	}
-	timestamp, err := time.Parse(time.RFC3339, row.Timestamp)
-	if err != nil {
-		return // a row whose timestamp does not parse is skipped: with a zero
-		// time it would beat every older dated row and its reading would be
-		// reported as "just now" no matter how old it actually is
-	}
 	if r.path == "" || !timestamp.Before(r.timestamp) {
 		var planType string
 		if rl.PlanType != nil {
 			planType = *rl.PlanType
 		}
 		scanErr := r.scanErr
+		reachedType, reachedAt := r.reachedType, r.reachedAt
 		*r = codexReport{timestamp: timestamp, path: path, root: root,
 			planType: planType, primary: rl.Primary, secondary: rl.Secondary}
 		r.scanErr = scanErr
+		r.reachedType, r.reachedAt = reachedType, reachedAt
 	}
 }
 
@@ -499,6 +554,17 @@ func (s codexSource) scan() (snap Snapshot) {
 		snap.Warning = "a log is cut off; the reading may be stale"
 	}
 	snap.Detail = report.path
+	// A blocked signal only counts if it is at least as new as the reading:
+	// an hour-old block followed by a fresh normal row means the block is
+	// over. It also only counts against the wall clock, not just the
+	// reading: a block with nothing newer in the log goes stale exactly like
+	// any other window, since whatever window produced it has certainly
+	// rolled over by codexReachedStaleAfter -- the longest window this
+	// scanner ever labels -- even with no fresher row around to say so.
+	if report.reachedType != "" && !report.reachedAt.Before(report.timestamp) &&
+		!windowExpired(codexReachedStaleAfter, report.reachedAt, snap.At) {
+		snap.LimitReached = report.reachedType
+	}
 	now := time.Now()
 	for _, entry := range []struct {
 		key, label string
@@ -524,9 +590,15 @@ func (s codexSource) scan() (snap Snapshot) {
 		if entry.window.WindowMinutes != nil && *entry.window.WindowMinutes > 0 {
 			window.Length = time.Duration(*entry.window.WindowMinutes) * time.Minute
 		}
+		window.Expired = windowExpired(window.Length, snap.Observed, snap.At)
 		if entry.window.ResetsAt != nil {
 			window.ResetsAt = time.Unix(int64(*entry.window.ResetsAt), 0)
 			if !window.ResetsAt.After(now) {
+				// The reported reset instant is definitive evidence the
+				// window has rolled over, even when the window's length is
+				// unknown or the observation is too recent for the
+				// length-based check above to catch it.
+				window.Expired = true
 				window.Note = "reset time has passed; awaiting a new report"
 			}
 		}

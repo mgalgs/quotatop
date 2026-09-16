@@ -191,10 +191,23 @@ func wrap(text string, width int) []string {
 // gauge, then the reset countdown and burn projection.
 func windowLines(width int, source string, window Window, history *History, now time.Time) []string {
 	right := percentText(window.Percent)
-	colour := gradientAt(window.Percent / 100)
-	rightStyled := lipgloss.NewStyle().Foreground(colour.color()).Bold(true).Render(right)
+	rightStyled := lipgloss.NewStyle().Foreground(gradientAt(window.Percent / 100).color()).Bold(true).Render(right)
+	barPct := window.Percent
+	if window.Expired {
+		right = "—"
+		rightStyled = styleDim.Render(right)
+		barPct = 0
+	}
 
-	spark := sparkline(history.Trend(source+"/"+window.Key, window.Percent, sparkWidth))
+	// A sparkline ending at the current reading is itself a claim about the
+	// live window, so it is withheld on expiry for the same reason the gauge
+	// and the projection are: it would sit right next to the withheld
+	// percentage, plotting the exact number the heading just refused to
+	// state.
+	spark := ""
+	if !window.Expired {
+		spark = sparkline(history.Trend(source+"/"+window.Key, window.Percent, sparkWidth))
+	}
 	label := styleTxt.Render(window.Label)
 	fill := width - lipgloss.Width(label) - lipgloss.Width(spark) - lipgloss.Width(right) - 2
 	if fill < 1 {
@@ -211,22 +224,27 @@ func windowLines(width int, source string, window Window, history *History, now 
 	full := styleDim.Render(resetText(window.ResetsAt, now, false))
 	brief := styleDim.Render(resetText(window.ResetsAt, now, true))
 	candidates := []string{full, brief}
-	projection := history.Project(source, window, now)
-	if text, gap, urgent := projectionText(projection, window.ResetsAt, now); text != "" {
-		style := styleDim
-		if urgent {
-			style = styleErr
-		}
-		separator := styleDim.Render(" · ")
-		candidates = append([]string{
-			full + separator + style.Render(text),
-			brief + separator + style.Render(text),
-		}, candidates...)
-		if gap != "" {
+	// An expired window's percentage is already withheld above; a burn
+	// projection is itself a percentage claim, so it is withheld too rather
+	// than extrapolating from the discarded reading.
+	if !window.Expired {
+		projection := history.Project(source, window, now)
+		if text, gap, urgent := projectionText(projection, window.ResetsAt, now); text != "" {
+			style := styleDim
+			if urgent {
+				style = styleErr
+			}
+			separator := styleDim.Render(" · ")
 			candidates = append([]string{
-				full + separator + style.Render(text+gap),
-				brief + separator + style.Render(text+gap),
+				full + separator + style.Render(text),
+				brief + separator + style.Render(text),
 			}, candidates...)
+			if gap != "" {
+				candidates = append([]string{
+					full + separator + style.Render(text+gap),
+					brief + separator + style.Render(text+gap),
+				}, candidates...)
+			}
 		}
 	}
 	detail := candidates[len(candidates)-1]
@@ -237,9 +255,14 @@ func windowLines(width int, source string, window Window, history *History, now 
 		}
 	}
 
-	lines := []string{heading, gauge(width, window.Percent), truncate(detail, width)}
-	if window.Note != "" {
-		lines = append(lines, styleWrn.Render(truncate("· "+window.Note, width)))
+	note := window.Note
+	if window.Expired {
+		note = "window reset since this reading"
+	}
+
+	lines := []string{heading, gauge(width, barPct), truncate(detail, width)}
+	if note != "" {
+		lines = append(lines, styleWrn.Render(truncate("· "+note, width)))
 	}
 	return lines
 }
@@ -255,6 +278,9 @@ func panel(width int, snap *Snapshot, history *History, now time.Time, loading b
 
 	worst := 0.0
 	for _, window := range snap.Windows {
+		if window.Expired {
+			continue
+		}
 		worst = math.Max(worst, window.Percent)
 	}
 	title := lipgloss.NewStyle().Foreground(gradientAt(worst / 100).color()).Bold(true).Render(snap.Title)
@@ -272,6 +298,13 @@ func panel(width int, snap *Snapshot, history *History, now time.Time, loading b
 				body = append(body, "")
 			}
 			body = append(body, windowLines(content, snap.Source, window, history, now)...)
+		}
+		// A block and a warning are independent facts -- the only warning the
+		// codex scanner raises is that a log is cut off, which is a caveat on
+		// everything else in the panel, including a block riding on that same
+		// truncated log. Neither should swallow the other.
+		if snap.LimitReached != "" {
+			body = append(body, "", styleErr.Render(truncate("blocked: "+humanizeReason(snap.LimitReached), content)))
 		}
 		if snap.Warning != "" {
 			body = append(body, "", styleWrn.Render(truncate(snap.Warning, content)))
@@ -306,6 +339,9 @@ func (m model) headerLine(width int) string {
 			continue
 		}
 		for _, window := range snap.Windows {
+			if window.Expired {
+				continue
+			}
 			worst = math.Max(worst, window.Percent)
 		}
 	}
@@ -339,6 +375,9 @@ func (m model) tightest() (string, float64, bool) {
 			continue
 		}
 		for _, window := range snap.Windows {
+			if window.Expired {
+				continue
+			}
 			if window.Percent > worst {
 				name, worst, found = snap.Title+" "+window.Label, window.Percent, true
 			}
@@ -395,6 +434,11 @@ func (m model) helpBody(width int) string {
 		body = append(body, styleDim.Render("codex source "+shortenPath(m.codex.Detail)))
 	}
 	return box(width, styleTxt.Bold(true).Render("KEYS"), "", body, "", "")
+}
+
+// humanizeReason turns a snake_case reason code into readable words.
+func humanizeReason(s string) string {
+	return strings.ReplaceAll(s, "_", " ")
 }
 
 func shortenPath(path string) string {

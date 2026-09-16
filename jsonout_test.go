@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -151,6 +152,42 @@ func TestEncodeJSONProjectionContract(t *testing.T) {
 	projection = jsonSources(t, invalid)[0].(map[string]any)["windows"].([]any)[0].(map[string]any)["projection"].(map[string]any)
 	if !reflect.DeepEqual(projection, map[string]any{"valid": false}) {
 		t.Fatalf("invalid projection = %#v", projection)
+	}
+}
+
+// Both new fields are additive to schema 1 via omitempty: the ordinary case
+// (no expiry, no block) must be byte-identical to output with neither field
+// wired in, and the fields must appear once the values are non-zero.
+func TestEncodeJSONExpiredAndLimitReachedAreOmittedWhenZero(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	doc := encodeJSON([]Snapshot{
+		{Source: "claude", Windows: []Window{{Key: "session", Percent: 10}}},
+		{Source: "codex", Windows: []Window{{Key: "primary", Percent: 20}}},
+	}, loadHistory(""), now)
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(raw)
+	if strings.Contains(text, `"expired"`) {
+		t.Errorf("output contains \"expired\" with no expired window: %s", text)
+	}
+	if strings.Contains(text, `"limit_reached"`) {
+		t.Errorf("output contains \"limit_reached\" with no block: %s", text)
+	}
+
+	blocked := encodeJSON([]Snapshot{
+		{Source: "claude", Windows: []Window{{Key: "session", Percent: 10, Expired: true}}},
+		{Source: "codex", LimitReached: "workspace_member_usage_limit_reached", Windows: []Window{{Key: "primary", Percent: 20}}},
+	}, loadHistory(""), now)
+	claude := jsonSources(t, blocked)[0].(map[string]any)
+	window := claude["windows"].([]any)[0].(map[string]any)
+	if window["expired"] != true {
+		t.Errorf("expired window = %#v, want expired:true present", window)
+	}
+	codex := jsonSources(t, blocked)[1].(map[string]any)
+	if codex["limit_reached"] != "workspace_member_usage_limit_reached" {
+		t.Errorf("codex source = %#v, want limit_reached present", codex)
 	}
 }
 
