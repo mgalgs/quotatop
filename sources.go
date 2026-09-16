@@ -40,6 +40,7 @@ func windowExpired(length time.Duration, observed, now time.Time) bool {
 // Snapshot is everything one source knows right now.
 type Snapshot struct {
 	Source       string // "claude" or "codex"
+	Account      string // "" until a later round adds multi-account configuration
 	Title        string
 	Chip         string // plan or similar, shown in the panel's top-right
 	Windows      []Window
@@ -51,6 +52,18 @@ type Snapshot struct {
 	LimitReached string // reason the account is refusing work, "" when not blocked
 	Err          error
 	At           time.Time // when this snapshot was produced
+}
+
+// Identity is the stable id for one source/account pair: the source alone
+// when there is no account, else "source/account". Every site that needs
+// this pairing -- a history key, a cache filename -- calls this method
+// rather than concatenating the two fields itself, so the format has exactly
+// one definition to change.
+func (s Snapshot) Identity() string {
+	if s.Account == "" {
+		return s.Source
+	}
+	return s.Source + "/" + s.Account
 }
 
 // --- Claude ---------------------------------------------------------------
@@ -118,6 +131,21 @@ type claudeSource struct {
 	doRequest       func(*http.Request) (*http.Response, error)
 	credentialsPath string
 	cachePath       string
+	account         string // "" until a later round adds multi-account configuration
+}
+
+// claudeCacheFileName names the on-disk cache for one Claude account. An
+// empty account keeps today's shared filename, so the empty-account path
+// never changes; a future non-empty account gets a file of its own, so
+// reading a second account can never write its numbers into the first
+// account's cache -- observed live on this host, where a shared cache made a
+// plain read report the wrong account's quota for the whole 10-minute cache
+// lifetime.
+func claudeCacheFileName(account string) string {
+	if account == "" {
+		return "claude-quota.json"
+	}
+	return "claude-quota-" + account + ".json"
 }
 
 // defaultClaudeSource wires the real paths: the token lives in
@@ -126,7 +154,7 @@ func defaultClaudeSource() claudeSource {
 	var source claudeSource
 	if home, err := os.UserHomeDir(); err == nil {
 		source.credentialsPath = filepath.Join(home, ".claude", ".credentials.json")
-		source.cachePath = filepath.Join(home, ".cache", "quotatop", "claude-quota.json")
+		source.cachePath = filepath.Join(home, ".cache", "quotatop", claudeCacheFileName(source.account))
 	}
 	// QUOTATOP_CLAUDE_CREDENTIALS overrides the credentials path, e.g. for a
 	// macOS user whose token lives in the Keychain and who has exported it
@@ -217,7 +245,7 @@ func (s claudeSource) writeCache(payload claudePayload, fetchedAt time.Time) {
 }
 
 func (s claudeSource) fetch(fresh bool) Snapshot {
-	snap := Snapshot{Source: "claude", Title: "CLAUDE", Verb: "fetched", At: time.Now(),
+	snap := Snapshot{Source: "claude", Account: s.account, Title: "CLAUDE", Verb: "fetched", At: time.Now(),
 		Footnote: "account · 10m cache"}
 	now := time.Now()
 	if !fresh {
