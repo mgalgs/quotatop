@@ -57,15 +57,69 @@ func demoSnapshot(now time.Time) *Snapshot {
 func TestPanelIsRectangular(t *testing.T) {
 	now := time.Now()
 	history := loadHistory("")
+	expired := demoSnapshot(now)
+	expired.Windows[0].Expired = true
+	blocked := demoSnapshot(now)
+	blocked.LimitReached = "workspace_member_usage_limit_reached"
+	blocked.Warning = "a log is cut off; the reading may be stale"
 	cases := map[string]*Snapshot{
 		"loading": nil,
 		"ok":      demoSnapshot(now),
 		"error":   {Source: "codex", Title: "CODEX", Err: errors.New(strings.Repeat("failure ", 12))},
+		"expired": expired,
+		"blocked": blocked,
 	}
 	for name, snap := range cases {
 		for _, width := range []int{34, 46, 66, 132} {
 			everyLineWidth(t, panel(width, snap, history, now, false), width, name)
 		}
+	}
+}
+
+// An expired window must not show a percentage or a filled gauge: the
+// reading describes a window that has already reset.
+func TestWindowLinesExpiredWindowHidesPercentageAndGauge(t *testing.T) {
+	now := time.Now()
+	history := loadHistory("")
+	window := Window{Key: "session", Label: "5-hour", Percent: 97, Expired: true}
+	lines := windowLines(60, "claude", window, history, now)
+	if strings.Contains(lines[0], "97%") {
+		t.Errorf("heading = %q, want no stale percentage", lines[0])
+	}
+	if !strings.Contains(lines[0], "—") {
+		t.Errorf("heading = %q, want a dash where the percentage goes", lines[0])
+	}
+	if lipgloss.Width(lines[1]) != lipgloss.Width(gauge(60, 0)) {
+		t.Errorf("gauge line width mismatch: %q", lines[1])
+	}
+	if lines[1] != gauge(60, 0) {
+		t.Errorf("gauge = %q, want an empty gauge (as if pct were 0)", lines[1])
+	}
+	found := false
+	for _, line := range lines {
+		if strings.Contains(line, "window reset since this reading") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("lines = %v, want a note explaining the expiry", lines)
+	}
+}
+
+// A blocked source must say so, in the prominent slot, ahead of an ordinary
+// Warning when both are present -- the block is the actionable one.
+func TestPanelBlockedSourceWinsOverWarning(t *testing.T) {
+	now := time.Now()
+	history := loadHistory("")
+	snap := demoSnapshot(now)
+	snap.LimitReached = "workspace_member_usage_limit_reached"
+	snap.Warning = "a log is cut off; the reading may be stale"
+	rendered := panel(66, snap, history, now, false)
+	if !strings.Contains(rendered, "workspace member usage limit reached") {
+		t.Errorf("panel does not humanize/render the block:\n%s", rendered)
+	}
+	if strings.Contains(rendered, "a log is cut off") {
+		t.Errorf("panel rendered the Warning even though a block took the slot:\n%s", rendered)
 	}
 }
 
