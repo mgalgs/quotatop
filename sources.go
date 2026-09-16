@@ -132,8 +132,7 @@ type claudeSource struct {
 	// doRequest performs the usage request; nil uses http.DefaultClient.Do.
 	doRequest       func(*http.Request) (*http.Response, error)
 	credentialsPath string
-	cacheDir        string // base directory the cache file lives in
-	cachePath       string // overrides the resolved cache path entirely; tests use this to avoid cacheDir/account
+	cacheDir        string // base directory the cache file lives in; "" disables the cache entirely
 	account         string // "" until a later round adds multi-account configuration
 }
 
@@ -146,16 +145,19 @@ type claudeSource struct {
 // lifetime.
 //
 // account is interpolated into the filename, not a path, so any path
-// separator in it is replaced first: an account of "../../secrets" or one
-// containing "/" must stay a single filename component, never a way to steer
-// the cache outside its directory. Accounts come from the user's config
-// file, so this boundary has to hold even though nothing sets a non-empty
-// account yet.
+// separator in it is percent-encoded first: an account of "../../secrets" or
+// one containing "/" must stay a single filename component, never a way to
+// steer the cache outside its directory. Accounts come from the user's
+// config file, so this boundary has to hold even though nothing sets a
+// non-empty account yet. Percent-encoding (rather than replacing separators
+// with a fixed character) keeps the mapping injective: "%" is escaped first,
+// so two distinct accounts -- e.g. "a/b" and "a_b" -- can never collapse
+// onto the same filename and share a cache.
 func claudeCacheFileName(account string) string {
 	if account == "" {
 		return "claude-quota.json"
 	}
-	safe := strings.NewReplacer("/", "_", string(filepath.Separator), "_").Replace(account)
+	safe := strings.NewReplacer("%", "%25", "/", "%2F", "\\", "%5C").Replace(account)
 	return "claude-quota-" + safe + ".json"
 }
 
@@ -164,12 +166,13 @@ func claudeCacheFileName(account string) string {
 // source's account -- knowable only after defaultClaudeSource returns, once
 // multi-account configuration exists -- is always reflected: baking the path
 // in early would silently freeze it at whatever account was set (typically
-// none) before the real one was assigned. cachePath, when set, overrides
-// this entirely; tests use that to point at a temp file without touching
-// cacheDir or account at all.
+// none) before the real one was assigned. An empty cacheDir (home directory
+// unresolvable) returns "" rather than a path relative to the working
+// directory: readCache and writeCache both treat "" as "no cache", the same
+// discipline defaultHistoryPath uses.
 func (s claudeSource) resolvedCachePath() string {
-	if s.cachePath != "" {
-		return s.cachePath
+	if s.cacheDir == "" {
+		return ""
 	}
 	return filepath.Join(s.cacheDir, claudeCacheFileName(s.account))
 }
@@ -225,7 +228,11 @@ type claudeCache struct {
 // shape -- is a miss rather than an error: a bad cache costs one extra
 // request, not a red panel.
 func (s claudeSource) readCache() (claudePayload, time.Time, bool) {
-	raw, err := os.ReadFile(s.resolvedCachePath())
+	path := s.resolvedCachePath()
+	if path == "" {
+		return claudePayload{}, time.Time{}, false
+	}
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		return claudePayload{}, time.Time{}, false
 	}
@@ -246,6 +253,9 @@ func (s claudeSource) writeCache(payload claudePayload, fetchedAt time.Time) {
 		return
 	}
 	target := s.resolvedCachePath()
+	if target == "" {
+		return
+	}
 	dir := filepath.Dir(target)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return

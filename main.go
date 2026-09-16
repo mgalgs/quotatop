@@ -163,10 +163,10 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// record files every window into the trend history, stamped with when the
-// reading was observed rather than when it was collected, so the burn rate is
-// computed against real elapsed time.
-func (m model) record(snap *Snapshot) {
+// recordSnapshot files every window of one snapshot into history, stamped
+// with when the reading was observed rather than when it was collected, so
+// the burn rate is computed against real elapsed time.
+func recordSnapshot(history *History, snap Snapshot) {
 	if snap.Err != nil {
 		return
 	}
@@ -175,8 +175,13 @@ func (m model) record(snap *Snapshot) {
 		at = snap.At
 	}
 	for _, window := range snap.Windows {
-		m.history.Add(historyKey(snap.Identity(), window.Key), at, window.Percent)
+		history.Add(historyKey(snap.Identity(), window.Key), at, window.Percent)
 	}
+}
+
+// record files a snapshot into the model's own history.
+func (m model) record(snap *Snapshot) {
+	recordSnapshot(m.history, *snap)
 }
 
 func terminalWidth(fallback int) int {
@@ -281,16 +286,7 @@ func recordJSONSnapshots(history *History, snaps []Snapshot, record bool) {
 	}
 	history.Cleanup()
 	for _, snap := range snaps {
-		if snap.Err != nil {
-			continue
-		}
-		at := snap.Observed
-		if at.IsZero() {
-			at = snap.At
-		}
-		for _, window := range snap.Windows {
-			history.Add(historyKey(snap.Identity(), window.Key), at, window.Percent)
-		}
+		recordSnapshot(history, snap)
 	}
 }
 

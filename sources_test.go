@@ -46,7 +46,7 @@ func claudeTestSource(t *testing.T, stub *claudeStub) claudeSource {
 	return claudeSource{
 		doRequest:       stub.do,
 		credentialsPath: creds,
-		cachePath:       filepath.Join(dir, "cache", "claude-quota.json"),
+		cacheDir:        filepath.Join(dir, "cache"),
 	}
 }
 
@@ -153,7 +153,7 @@ func TestClaudeFreshCacheIsUsedWithoutRequest(t *testing.T) {
 	stub := &claudeStub{status: 200, body: realisticClaudePayload}
 	src := claudeTestSource(t, stub)
 	stamp := time.Now().Add(-30 * time.Second)
-	writeClaudeCache(t, src.cachePath, realisticClaudePayload, stamp)
+	writeClaudeCache(t, src.resolvedCachePath(), realisticClaudePayload, stamp)
 	snap := src.fetch(false)
 	if snap.Err != nil {
 		t.Fatalf("fetch failed: %v", snap.Err)
@@ -169,7 +169,7 @@ func TestClaudeFreshCacheIsUsedWithoutRequest(t *testing.T) {
 func TestClaudeStaleCacheRefetches(t *testing.T) {
 	stub := &claudeStub{status: 200, body: realisticClaudePayload}
 	src := claudeTestSource(t, stub)
-	writeClaudeCache(t, src.cachePath, realisticClaudePayload, time.Now().Add(-601*time.Second))
+	writeClaudeCache(t, src.resolvedCachePath(), realisticClaudePayload, time.Now().Add(-601*time.Second))
 	if snap := src.fetch(false); snap.Err != nil {
 		t.Fatalf("fetch failed: %v", snap.Err)
 	}
@@ -181,7 +181,7 @@ func TestClaudeStaleCacheRefetches(t *testing.T) {
 func TestClaudeFreshBypassesYoungCache(t *testing.T) {
 	stub := &claudeStub{status: 200, body: realisticClaudePayload}
 	src := claudeTestSource(t, stub)
-	writeClaudeCache(t, src.cachePath, realisticClaudePayload, time.Now().Add(-10*time.Second))
+	writeClaudeCache(t, src.resolvedCachePath(), realisticClaudePayload, time.Now().Add(-10*time.Second))
 	if snap := src.fetch(true); snap.Err != nil {
 		t.Fatalf("fetch failed: %v", snap.Err)
 	}
@@ -193,10 +193,10 @@ func TestClaudeFreshBypassesYoungCache(t *testing.T) {
 func TestClaudeCorruptCacheIsAMiss(t *testing.T) {
 	stub := &claudeStub{status: 200, body: realisticClaudePayload}
 	src := claudeTestSource(t, stub)
-	if err := os.MkdirAll(filepath.Dir(src.cachePath), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(src.resolvedCachePath()), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(src.cachePath, []byte("{not json"), 0o600); err != nil {
+	if err := os.WriteFile(src.resolvedCachePath(), []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	snap := src.fetch(false)
@@ -217,7 +217,7 @@ func TestClaudeObservedIsTheCacheStamp(t *testing.T) {
 	if snap.Err != nil {
 		t.Fatalf("fetch failed: %v", snap.Err)
 	}
-	raw, err := os.ReadFile(src.cachePath)
+	raw, err := os.ReadFile(src.resolvedCachePath())
 	if err != nil {
 		t.Fatalf("the cache was not written: %v", err)
 	}
@@ -238,7 +238,7 @@ func TestClaudeEmptyLimits200IsNotCached(t *testing.T) {
 	if snap := src.fetch(false); snap.Err == nil {
 		t.Fatal("an empty-limits 200 produced no error")
 	}
-	if _, err := os.Stat(src.cachePath); !os.IsNotExist(err) {
+	if _, err := os.Stat(src.resolvedCachePath()); !os.IsNotExist(err) {
 		t.Errorf("an unusable payload was written to the cache (stat err = %v)", err)
 	}
 	// Recovery: the next poll makes a request again, and a good payload wins.
@@ -257,7 +257,7 @@ func TestClaudeEmptyLimits200IsNotCached(t *testing.T) {
 func TestClaudeYoungBadCacheRefetches(t *testing.T) {
 	stub := &claudeStub{status: 200, body: realisticClaudePayload}
 	src := claudeTestSource(t, stub)
-	writeClaudeCache(t, src.cachePath, `{"limits":[]}`, time.Now().Add(-30*time.Second))
+	writeClaudeCache(t, src.resolvedCachePath(), `{"limits":[]}`, time.Now().Add(-30*time.Second))
 	snap := src.fetch(false)
 	if snap.Err != nil {
 		t.Fatalf("a bad cache turned into a red panel: %v", snap.Err)
@@ -270,7 +270,7 @@ func TestClaudeYoungBadCacheRefetches(t *testing.T) {
 func TestClaudeMissingCredentialsAreAnOrdinaryError(t *testing.T) {
 	src := claudeSource{
 		credentialsPath: filepath.Join(t.TempDir(), "absent.json"),
-		cachePath:       filepath.Join(t.TempDir(), "cache.json"),
+		cacheDir:        t.TempDir(),
 	}
 	snap := src.fetch(true)
 	if snap.Err == nil || !strings.Contains(snap.Err.Error(), "not signed in to Claude Code") {
@@ -1147,7 +1147,7 @@ func TestClaudeResolvedCachePathTracksAccountSetAfterConstruction(t *testing.T) 
 // a single filename component so it can never steer the cache outside its
 // directory or into an arbitrary subdirectory.
 func TestClaudeCacheFileNameRejectsPathTraversal(t *testing.T) {
-	for _, account := range []string{"../../secrets", "a/b", "/etc/passwd", ".."} {
+	for _, account := range []string{"../../secrets", "a/b", "/etc/passwd", "..", `a\b`} {
 		name := claudeCacheFileName(account)
 		if strings.ContainsAny(name, `/\`) {
 			t.Errorf("claudeCacheFileName(%q) = %q, want no path separator", account, name)
@@ -1155,6 +1155,53 @@ func TestClaudeCacheFileNameRejectsPathTraversal(t *testing.T) {
 		if filepath.Base(name) != name {
 			t.Errorf("claudeCacheFileName(%q) = %q, want a single path component", account, name)
 		}
+	}
+}
+
+// The escaping has to be injective: two accounts that only differ in how
+// they'd naively collide after sanitisation must still land on distinct
+// filenames, or one account's cache silently answers for both.
+func TestClaudeCacheFileNameDoesNotCollide(t *testing.T) {
+	pairs := [][2]string{
+		{"a/b", "a_b"},
+		{"a%2Fb", "a/b"},
+		{`a\b`, "a_b"},
+	}
+	for _, pair := range pairs {
+		if got := claudeCacheFileName(pair[0]); got == claudeCacheFileName(pair[1]) {
+			t.Errorf("claudeCacheFileName(%q) and claudeCacheFileName(%q) both = %q, want distinct names", pair[0], pair[1], got)
+		}
+	}
+}
+
+// If the home directory cannot be resolved, the cache must be disabled
+// outright rather than falling back to a path relative to the current
+// working directory: a scrubbed-environment invocation (no HOME) must never
+// read or write a cache file wherever it happened to be started.
+func TestClaudeEmptyCacheDirDisablesCache(t *testing.T) {
+	stub := &claudeStub{status: 200, body: realisticClaudePayload}
+	src := claudeSource{
+		doRequest:       stub.do,
+		credentialsPath: filepath.Join(t.TempDir(), "absent.json"),
+	}
+	if got := src.resolvedCachePath(); got != "" {
+		t.Fatalf("resolvedCachePath() = %q, want empty with no cacheDir", got)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadDir(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	src.writeCache(claudePayload{}, time.Now())
+	after, err := os.ReadDir(cwd)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != len(before) {
+		t.Errorf("writeCache with no cacheDir touched the working directory: before %v, after %v", before, after)
 	}
 }
 
