@@ -50,7 +50,13 @@ jobs:
         run: |
           for target in windows/amd64 aix/ppc64 darwin/arm64; do
             echo "building $target"
-            GOOS="${target%/*}" GOARCH="${target#*/}" go build ./...
+            # -o /dev/null because a bare `go build` drops its artifact in the
+            # package directory: the aix build overwrites ./quotatop with a
+            # binary this machine cannot exec, and the windows build leaves a
+            # stray quotatop.exe behind. Both happened while developing this
+            # step. Compiling is the whole point here; the output is not.
+            export GOOS="${target%/*}" GOARCH="${target#*/}"
+            go build -o /dev/null ./...
           done
 
       # Separate from the plain test step, not folded into it: -race needs cgo
