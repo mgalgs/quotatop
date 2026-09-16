@@ -16,6 +16,7 @@ type jsonDoc struct {
 
 type jsonSource struct {
 	Source             string       `json:"source"`
+	ID                 string       `json:"id"`
 	Account            string       `json:"account,omitempty"`
 	Title              string       `json:"title"`
 	Plan               string       `json:"plan"`
@@ -118,6 +119,7 @@ func sourceTitle(source string) string {
 func encodeJSONSource(snap Snapshot, history *History, now time.Time) jsonSource {
 	source := jsonSource{
 		Source:       snap.Source,
+		ID:           snap.Identity(),
 		Account:      snap.Account,
 		Title:        snap.Title,
 		Plan:         snap.Chip,
