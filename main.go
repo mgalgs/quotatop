@@ -298,7 +298,7 @@ func main() {
 		fmt.Fprint(flag.CommandLine.Output(), usageText)
 		flag.PrintDefaults()
 	}
-	interval := flag.Duration("interval", 20*time.Second, "how often to poll both sources")
+	interval := flag.Duration("interval", 20*time.Second, "how often to poll all sources")
 	snapshot := flag.Bool("snapshot", false, "render one frame to stdout and exit (no TUI)")
 	jsonOutput := flag.Bool("json", false, "write one JSON document to stdout and exit (no TUI)")
 	fresh := flag.Bool("fresh", false, "bypass the Claude 10-minute quota cache on the first read")

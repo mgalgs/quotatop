@@ -36,14 +36,14 @@ Give it its own tmux window and leave it there.
 
 | Key | Does |
 |-----|------|
-| `r` | refresh both sources now |
+| `r` | refresh all sources now |
 | `R` | refresh Claude past its 10-minute cache (a real API call) |
 | `?` | toggle the key list and data-source notes |
 | `q` / `esc` / `ctrl-c` | quit |
 
 | Flag | Does |
 |------|------|
-| `--interval 20s` | how often to poll both sources |
+| `--interval 20s` | how often to poll all sources |
 | `--snapshot` | render one frame to stdout and exit — no TUI |
 | `--json` | write one JSON document to stdout and exit — no TUI |
 | `--width N` | width for `--snapshot` (0 detects the terminal, falls back to the widest layout) |
@@ -144,9 +144,10 @@ A labelled panel's title gains `· <label>`, and its `--json` entry gains an
 `account` field carrying the label — see below.
 
 Setting a label's environment variable to the empty string disables it even
-when the config file declares it, the same way an empty `QUOTATOP_CODEX_ROOTS`
-would — useful for turning an account off on one machine without editing the
-shared config file.
+when the config file declares it — useful for turning an account off on one
+machine without editing the shared config file. This is unlike plain settings
+such as `QUOTATOP_CODEX_ROOTS`, where an empty environment variable counts as
+unset and falls back to the config file instead of disabling anything.
 
 ## Trend and burn rate
 
