@@ -334,7 +334,8 @@ func panel(width int, snap *Snapshot, history *History, now time.Time, loading b
 
 func (m model) headerLine(width int) string {
 	worst := 0.0
-	for _, snap := range []*Snapshot{m.claude, m.codex} {
+	for _, source := range m.sources {
+		snap := source.snap
 		if snap == nil || snap.Err != nil {
 			continue
 		}
@@ -370,7 +371,8 @@ func (m model) headerLine(width int) string {
 // number worth carrying away from a glance at this screen.
 func (m model) tightest() (string, float64, bool) {
 	name, worst, found := "", -1.0, false
-	for _, snap := range []*Snapshot{m.claude, m.codex} {
+	for _, source := range m.sources {
+		snap := source.snap
 		if snap == nil || snap.Err != nil {
 			continue
 		}
@@ -430,8 +432,11 @@ func (m model) helpBody(width int) string {
 		styleDim.Render(fmt.Sprintf("polling every %s · trend and burn rate from %s",
 			compactDuration(m.interval), shortenPath(m.history.path))),
 		styleDim.Render("5-hour rate from the last 90m · weekly from the window's own elapsed pace"))
-	if m.codex != nil && m.codex.Detail != "" {
-		body = append(body, styleDim.Render("codex source "+shortenPath(m.codex.Detail)))
+	for _, source := range m.sources {
+		if source.snap != nil && source.snap.Identity() == "codex" && source.snap.Detail != "" {
+			body = append(body, styleDim.Render("codex source "+shortenPath(source.snap.Detail)))
+			break
+		}
 	}
 	return box(width, styleTxt.Bold(true).Render("KEYS"), "", body, "", "")
 }
@@ -451,6 +456,34 @@ func shortenPath(path string) string {
 	return path
 }
 
+// gridColumns is how many panels fit side by side at width, given panels no
+// narrower than minPanel with panelGap between them -- clamped to at least
+// one column and at most n, the number of panels there are to place.
+func gridColumns(width, n int) int {
+	cols := (width + panelGap) / (minPanel + panelGap)
+	if cols < 1 {
+		cols = 1
+	}
+	if cols > n {
+		cols = n
+	}
+	return cols
+}
+
+// rowWidths splits width across a row of k panels with panelGap between
+// each. Every panel gets usable/k, except the last, which takes whatever
+// division rounded away, so a row's widths always sum to width exactly.
+func rowWidths(width, k int) []int {
+	usable := width - (k-1)*panelGap
+	each := usable / k
+	widths := make([]int, k)
+	for i := range widths {
+		widths[i] = each
+	}
+	widths[k-1] = usable - each*(k-1)
+	return widths
+}
+
 func (m model) View() string {
 	width := m.width
 	if width == 0 {
@@ -467,19 +500,27 @@ func (m model) View() string {
 		width = maxLayout
 	}
 
-	var panels string
-	if width >= minPanel*2+panelGap {
-		half := (width - panelGap) / 2
-		panels = lipgloss.JoinHorizontal(lipgloss.Top,
-			panel(half, m.claude, m.history, m.now, m.loadingClaude),
-			strings.Repeat(" ", panelGap),
-			panel(width-panelGap-half, m.codex, m.history, m.now, m.loadingCodex))
-	} else {
-		panels = strings.Join([]string{
-			panel(width, m.claude, m.history, m.now, m.loadingClaude),
-			panel(width, m.codex, m.history, m.now, m.loadingCodex),
-		}, "\n\n")
+	var rows []string
+	if n := len(m.sources); n > 0 {
+		cols := gridColumns(width, n)
+		for start := 0; start < n; start += cols {
+			end := start + cols
+			if end > n {
+				end = n
+			}
+			row := m.sources[start:end]
+			widths := rowWidths(width, len(row))
+			parts := make([]string, 0, len(row)*2-1)
+			for i, source := range row {
+				if i > 0 {
+					parts = append(parts, strings.Repeat(" ", panelGap))
+				}
+				parts = append(parts, panel(widths[i], source.snap, m.history, m.now, source.loading))
+			}
+			rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, parts...))
+		}
 	}
+	panels := strings.Join(rows, "\n\n")
 
 	sections := []string{m.headerLine(width), "", panels, ""}
 	if m.showHelp {

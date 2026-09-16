@@ -132,9 +132,9 @@ func TestTightestIgnoresExpiredWindows(t *testing.T) {
 	now := time.Now()
 	m := newModel(20*time.Second, loadHistory(""))
 	m.now = now
-	m.claude = &Snapshot{Source: "claude", Title: "CLAUDE", Observed: now,
+	m.sources[0].snap = &Snapshot{Source: "claude", Title: "CLAUDE", Observed: now,
 		Windows: []Window{{Key: "session", Label: "5-hour", Percent: 97, Expired: true}}}
-	m.codex = &Snapshot{Source: "codex", Title: "CODEX", Observed: now,
+	m.sources[1].snap = &Snapshot{Source: "codex", Title: "CODEX", Observed: now,
 		Windows: []Window{{Key: "primary", Label: "5-hour", Percent: 10}}}
 	name, worst, found := m.tightest()
 	if !found || worst != 10 || name != "CODEX 5-hour" {
@@ -165,8 +165,8 @@ func TestViewFitsTerminalWidth(t *testing.T) {
 		for _, help := range []bool{false, true} {
 			m := newModel(20*time.Second, loadHistory(""))
 			m.width, m.now, m.showHelp = width, now, help
-			m.claude = demoSnapshot(now)
-			m.codex = &Snapshot{Source: "codex", Title: "CODEX", Chip: "team", Verb: "reported",
+			m.sources[0].snap = demoSnapshot(now)
+			m.sources[1].snap = &Snapshot{Source: "codex", Title: "CODEX", Chip: "team", Verb: "reported",
 				Observed: now, Windows: []Window{{Key: "primary", Label: "5-hour", Percent: 13}}}
 			for i, line := range strings.Split(m.View(), "\n") {
 				if got := lipgloss.Width(line); got > width {
