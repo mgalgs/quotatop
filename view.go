@@ -191,8 +191,13 @@ func wrap(text string, width int) []string {
 // gauge, then the reset countdown and burn projection.
 func windowLines(width int, source string, window Window, history *History, now time.Time) []string {
 	right := percentText(window.Percent)
-	colour := gradientAt(window.Percent / 100)
-	rightStyled := lipgloss.NewStyle().Foreground(colour.color()).Bold(true).Render(right)
+	rightStyled := lipgloss.NewStyle().Foreground(gradientAt(window.Percent / 100).color()).Bold(true).Render(right)
+	barPct := window.Percent
+	if window.Expired {
+		right = "—"
+		rightStyled = styleDim.Render(right)
+		barPct = 0
+	}
 
 	spark := sparkline(history.Trend(source+"/"+window.Key, window.Percent, sparkWidth))
 	label := styleTxt.Render(window.Label)
@@ -237,9 +242,14 @@ func windowLines(width int, source string, window Window, history *History, now 
 		}
 	}
 
-	lines := []string{heading, gauge(width, window.Percent), truncate(detail, width)}
-	if window.Note != "" {
-		lines = append(lines, styleWrn.Render(truncate("· "+window.Note, width)))
+	note := window.Note
+	if window.Expired {
+		note = "window reset since this reading"
+	}
+
+	lines := []string{heading, gauge(width, barPct), truncate(detail, width)}
+	if note != "" {
+		lines = append(lines, styleWrn.Render(truncate("· "+note, width)))
 	}
 	return lines
 }
@@ -273,7 +283,9 @@ func panel(width int, snap *Snapshot, history *History, now time.Time, loading b
 			}
 			body = append(body, windowLines(content, snap.Source, window, history, now)...)
 		}
-		if snap.Warning != "" {
+		if snap.LimitReached != "" {
+			body = append(body, "", styleErr.Render(truncate("blocked: "+humanizeReason(snap.LimitReached), content)))
+		} else if snap.Warning != "" {
 			body = append(body, "", styleWrn.Render(truncate(snap.Warning, content)))
 		}
 	}
@@ -395,6 +407,11 @@ func (m model) helpBody(width int) string {
 		body = append(body, styleDim.Render("codex source "+shortenPath(m.codex.Detail)))
 	}
 	return box(width, styleTxt.Bold(true).Render("KEYS"), "", body, "", "")
+}
+
+// humanizeReason turns a snake_case reason code into readable words.
+func humanizeReason(s string) string {
+	return strings.ReplaceAll(s, "_", " ")
 }
 
 func shortenPath(path string) string {
