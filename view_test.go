@@ -142,6 +142,25 @@ func TestTightestIgnoresExpiredWindows(t *testing.T) {
 	}
 }
 
+// tightest() must name the account, not just the source, when two panels
+// share a source: the header's whole point is to say which panel needs
+// attention, and "CLAUDE 5-hour" is ambiguous the moment there are two.
+func TestTightestNamesTheRightAccount(t *testing.T) {
+	now := time.Now()
+	m := newModel(20*time.Second, loadHistory(""))
+	m.now = now
+	m.sources = []sourceState{
+		{snap: &Snapshot{Source: "claude", Account: "work", Title: "CLAUDE · work", Observed: now,
+			Windows: []Window{{Key: "session", Label: "5-hour", Percent: 90}}}},
+		{snap: &Snapshot{Source: "claude", Account: "personal", Title: "CLAUDE · personal", Observed: now,
+			Windows: []Window{{Key: "session", Label: "5-hour", Percent: 10}}}},
+	}
+	name, worst, found := m.tightest()
+	if !found || worst != 90 || name != "CLAUDE · work 5-hour" {
+		t.Errorf("tightest() = (%q, %v, %v), want (%q, 90, true)", name, worst, found, "CLAUDE · work 5-hour")
+	}
+}
+
 // A blocked source must say so, in the prominent slot, ahead of an ordinary
 // Warning when both are present -- the block is the actionable one.
 func TestPanelBlockedSourceAlsoShowsWarning(t *testing.T) {
@@ -309,6 +328,61 @@ func TestViewTrailingRowStaysUnderFullRowColumn(t *testing.T) {
 	startByte := strings.Index(trailingRow, "╭")
 	endByte := strings.Index(trailingRow, "╮") + len("╮")
 	trailingWidth := lipgloss.Width(trailingRow[startByte:endByte])
+	if trailingWidth != colWidths[0] {
+		t.Errorf("trailing row panel width = %d, want %d (a full row's column width, not stretched)",
+			trailingWidth, colWidths[0])
+	}
+}
+
+// The grid-arithmetic tests above only ever use synthetic "S0"/"S1"/"S2"
+// titles; this drives View() with the realistic mix this round adds -- two
+// Claude accounts plus a plain Codex panel -- to check both the row shape
+// and that the short trailing row keeps a full row's per-panel width rather
+// than stretching to fill it.
+func TestViewRendersTwoClaudeAccountsPlusCodexRealistically(t *testing.T) {
+	now := time.Now()
+	m := newModel(20*time.Second, loadHistory(""))
+	m.width, m.now = 132, now
+	m.sources = []sourceState{
+		{snap: &Snapshot{Source: "claude", Account: "work", Title: "CLAUDE · work", Observed: now,
+			Windows: []Window{{Key: "session", Label: "5-hour", Percent: 10}}}},
+		{snap: &Snapshot{Source: "claude", Account: "personal", Title: "CLAUDE · personal", Observed: now,
+			Windows: []Window{{Key: "session", Label: "5-hour", Percent: 10}}}},
+		{snap: &Snapshot{Source: "codex", Title: "CODEX", Observed: now,
+			Windows: []Window{{Key: "primary", Label: "5-hour", Percent: 10}}}},
+	}
+
+	view := m.View()
+	got := topBorderCounts(view)
+	want := []int{2, 1}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("row panel counts = %v, want %v", got, want)
+	}
+
+	cols := gridColumns(maxLayout, 3)
+	colWidths := rowWidths(maxLayout, cols)
+
+	var topBorders []string
+	for _, line := range strings.Split(view, "\n") {
+		if strings.Contains(line, "╭") {
+			topBorders = append(topBorders, line)
+		}
+	}
+	if len(topBorders) != 2 {
+		t.Fatalf("got %d top-border lines, want 2 (a full row and a trailing row)", len(topBorders))
+	}
+	fullRow, trailingRow := topBorders[0], topBorders[1]
+
+	fullStart := strings.Index(fullRow, "╭")
+	fullEnd := strings.Index(fullRow, "╮") + len("╮")
+	fullWidth := lipgloss.Width(fullRow[fullStart:fullEnd])
+	if fullWidth != colWidths[0] {
+		t.Errorf("full row first panel width = %d, want %d", fullWidth, colWidths[0])
+	}
+
+	trailingStart := strings.Index(trailingRow, "╭")
+	trailingEnd := strings.Index(trailingRow, "╮") + len("╮")
+	trailingWidth := lipgloss.Width(trailingRow[trailingStart:trailingEnd])
 	if trailingWidth != colWidths[0] {
 		t.Errorf("trailing row panel width = %d, want %d (a full row's column width, not stretched)",
 			trailingWidth, colWidths[0])

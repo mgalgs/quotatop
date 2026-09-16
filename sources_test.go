@@ -1143,6 +1143,45 @@ func TestClaudeResolvedCachePathTracksAccountSetAfterConstruction(t *testing.T) 
 	}
 }
 
+// Two named accounts must never resolve to the same cache file as each
+// other or as the no-account default: a shared cache would make a plain
+// read report the wrong account's quota.
+func TestClaudeResolvedCachePathDistinctBetweenTwoAccounts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setConfigValues(t, nil)
+	base := defaultClaudeSource()
+	noAccount := base.resolvedCachePath()
+
+	work := base
+	work.account = "work"
+	personal := base
+	personal.account = "personal"
+	workPath, personalPath := work.resolvedCachePath(), personal.resolvedCachePath()
+
+	if workPath == personalPath {
+		t.Errorf("work and personal both resolved to %q, want distinct cache files", workPath)
+	}
+	if workPath == noAccount {
+		t.Errorf("work resolved to the no-account path %q", noAccount)
+	}
+	if personalPath == noAccount {
+		t.Errorf("personal resolved to the no-account path %q", noAccount)
+	}
+}
+
+// A snapshot with no account keeps its title exactly as today; one with an
+// account is qualified with the " · " separator the codebase already uses
+// for a qualified label.
+func TestPanelTitle(t *testing.T) {
+	if got, want := panelTitle("CLAUDE", ""), "CLAUDE"; got != want {
+		t.Errorf("panelTitle(CLAUDE, \"\") = %q, want %q", got, want)
+	}
+	if got, want := panelTitle("CLAUDE", "work"), "CLAUDE · work"; got != want {
+		t.Errorf("panelTitle(CLAUDE, work) = %q, want %q", got, want)
+	}
+}
+
 // An account is user-config input, not a trusted path fragment: it must stay
 // a single filename component so it can never steer the cache outside its
 // directory or into an arbitrary subdirectory.
