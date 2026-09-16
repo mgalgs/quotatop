@@ -293,8 +293,14 @@ const (
 // extrapolating a working-hours rate across mostly-sleep time overstates the
 // burn. Measuring from the window's own open would in turn understate the
 // burn when the window sat idle before use began, so this measures from the
-// most recent sample where the bar was still at zero instead. It needs no
-// history at all, so it is correct on a machine with an empty history file.
+// first activity after the window's most recent zero reading instead: a
+// stored zero only tells us the bar was still at zero at that moment (Add
+// keeps just the first sample of a run, since it stores changes only), so
+// the earliest defensible mark for "activity began" is the next stored
+// sample, which tells us the bar was already positive by then. That slightly
+// overstates the rate rather than understating it, which is the safer
+// direction for a burn-rate warning. It needs no history at all, so it is
+// correct on a machine with an empty history file.
 //
 // It applies only to long windows (Length >= 24h) with a known reset deadline,
 // once at least 12h of measured activity have passed (the denominator is too
@@ -317,9 +323,19 @@ func (h *History) sustainedRate(identity string, window Window, now time.Time) (
 		return 0, false // nothing to measure
 	}
 	activityStart := windowStart
+	sawZero := false
 	for _, s := range h.data[historyKey(identity, window.Key)] {
-		if !s.T.Before(windowStart) && s.Pct <= 0 {
-			activityStart = s.T // the most recent zero reading in this window
+		if s.T.Before(windowStart) {
+			continue
+		}
+		if s.Pct <= 0 {
+			sawZero = true
+			activityStart = windowStart // unresolved until a later positive sample dates it
+			continue
+		}
+		if sawZero {
+			activityStart = s.T // first sample known to be positive after the last zero
+			sawZero = false
 		}
 	}
 	activityElapsed := now.Sub(activityStart)
