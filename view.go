@@ -367,7 +367,7 @@ func (m model) headerLine(width int) string {
 	return left + strings.Repeat(" ", gap) + right
 }
 
-// tightest names the window closest to its ceiling across both sources: the one
+// tightest names the window closest to its ceiling across all sources: the one
 // number worth carrying away from a glance at this screen.
 func (m model) tightest() (string, float64, bool) {
 	name, worst, found := "", -1.0, false
@@ -413,7 +413,7 @@ func (m model) footerLine(width int) string {
 
 func (m model) helpBody(width int) string {
 	rows := [][2]string{
-		{"r", "refresh both sources now"},
+		{"r", "refresh all sources now"},
 		{"R", "refresh Claude past its 10-minute cache (hits the API)"},
 		{"?", "toggle this help"},
 		{"q / esc / ctrl-c", "quit"},

@@ -80,6 +80,58 @@ func setting(key string) string {
 	return configValues[key]
 }
 
+// settingsWithPrefixEnvKeys, when non-nil, restricts settingsWithPrefix to
+// exactly these environment variable names instead of the full ambient
+// os.Environ() -- a test seam. Production code never sets it, so the real
+// environment is used unmodified. Tests set it so a QUOTATOP_*_ACCOUNT_*
+// value a developer has exported on their own machine for their own use can
+// never leak into a test that enumerates a specific, known set of account
+// labels (or asserts that none are configured at all).
+var settingsWithPrefixEnvKeys map[string]bool
+
+// settingsWithPrefix returns every setting whose key starts with prefix,
+// keyed by the remainder of the key after the prefix -- the account label for
+// a QUOTATOP_CLAUDE_ACCOUNT_<label> or QUOTATOP_CODEX_ACCOUNT_<label> key.
+// configValues supplies the starting set (already expandTilde-treated by
+// loadConfig); the environment is then overlaid on top, key by key. An empty
+// value -- from either source -- counts as unset and removes the entry, so a
+// cleared environment variable can disable an account the config file
+// declares -- unlike setting(), where an empty environment variable falls
+// back to the config file instead of deleting the value. A
+// suffix that is empty after trimming names no account and is skipped. Works
+// when configValues is nil.
+func settingsWithPrefix(prefix string) map[string]string {
+	result := map[string]string{}
+	apply := func(key, value string) {
+		if !strings.HasPrefix(key, prefix) {
+			return
+		}
+		suffix := strings.TrimSpace(key[len(prefix):])
+		if suffix == "" {
+			return
+		}
+		if value == "" {
+			delete(result, suffix)
+			return
+		}
+		result[suffix] = value
+	}
+	for key, value := range configValues {
+		apply(key, value)
+	}
+	for _, entry := range os.Environ() {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		if settingsWithPrefixEnvKeys != nil && !settingsWithPrefixEnvKeys[key] {
+			continue
+		}
+		apply(key, expandTilde(value))
+	}
+	return result
+}
+
 // expandTilde replaces a leading ~/ in path with the home directory, the
 // way a shell does. Nothing else is interpreted: a bare ~ or a ~user form is
 // left alone, and a tilde anywhere but at the start is not touched.

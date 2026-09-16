@@ -206,6 +206,26 @@ func TestHistoryKeyEmptyAccountFormat(t *testing.T) {
 	}
 }
 
+// Two accounts of the same source must never collide on the same history
+// key, and the no-account form must stay exactly what it has always been.
+func TestHistoryKeyDistinctBetweenAccounts(t *testing.T) {
+	work := Snapshot{Source: "claude", Account: "work"}.Identity()
+	personal := Snapshot{Source: "claude", Account: "personal"}.Identity()
+	if work == personal {
+		t.Fatalf("Identity() collided for distinct accounts: %q", work)
+	}
+	if got, want := historyKey(work, "weekly_all"), "claude/work/weekly_all"; got != want {
+		t.Errorf("historyKey(work) = %q, want %q", got, want)
+	}
+	if got, want := historyKey(personal, "weekly_all"), "claude/personal/weekly_all"; got != want {
+		t.Errorf("historyKey(personal) = %q, want %q", got, want)
+	}
+	noAccount := Snapshot{Source: "claude"}.Identity()
+	if got, want := historyKey(noAccount, "weekly_all"), "claude/weekly_all"; got != want {
+		t.Errorf("historyKey(no account) = %q, want %q", got, want)
+	}
+}
+
 // encodeJSON must be able to represent two snapshots of the same source --
 // the capability this round exists to add -- and must do so deterministically,
 // not via map iteration order.
@@ -225,6 +245,10 @@ func TestEncodeJSONSameSourceTwiceReturnsBoth(t *testing.T) {
 	}
 	if doc.Sources[2].Source != "codex" {
 		t.Fatalf("third source = %#v, want codex", doc.Sources[2])
+	}
+	if doc.Sources[0].ID != "claude/work" || doc.Sources[1].ID != "claude/personal" || doc.Sources[2].ID != "codex" {
+		t.Fatalf("ids = [%q %q %q], want distinct ids so a consumer can group by id instead of source",
+			doc.Sources[0].ID, doc.Sources[1].ID, doc.Sources[2].ID)
 	}
 }
 

@@ -815,6 +815,23 @@ func setConfigValues(t *testing.T, values map[string]string) {
 	t.Cleanup(func() { configValues = old })
 }
 
+// isolateAccountEnv restricts settingsWithPrefix, for the rest of the test,
+// to see only the named environment variables instead of the real ambient
+// environment -- so a QUOTATOP_*_ACCOUNT_* value a developer has exported on
+// their own machine for their own use can never leak into a test that
+// enumerates a specific, known set of labels (or none at all). Call it after
+// any t.Setenv for the keys the test wants visible.
+func isolateAccountEnv(t *testing.T, keys ...string) {
+	t.Helper()
+	old := settingsWithPrefixEnvKeys
+	visible := map[string]bool{}
+	for _, key := range keys {
+		visible[key] = true
+	}
+	settingsWithPrefixEnvKeys = visible
+	t.Cleanup(func() { settingsWithPrefixEnvKeys = old })
+}
+
 func TestLoadConfigPlainKeyValues(t *testing.T) {
 	path := writeConfigFile(t,
 		"QUOTATOP_CODEX_ROOTS=/var/tmp/agent-runs/session.*/codex-sessions\n"+
@@ -1143,6 +1160,45 @@ func TestClaudeResolvedCachePathTracksAccountSetAfterConstruction(t *testing.T) 
 	}
 }
 
+// Two named accounts must never resolve to the same cache file as each
+// other or as the no-account default: a shared cache would make a plain
+// read report the wrong account's quota.
+func TestClaudeResolvedCachePathDistinctBetweenTwoAccounts(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setConfigValues(t, nil)
+	base := defaultClaudeSource()
+	noAccount := base.resolvedCachePath()
+
+	work := base
+	work.account = "work"
+	personal := base
+	personal.account = "personal"
+	workPath, personalPath := work.resolvedCachePath(), personal.resolvedCachePath()
+
+	if workPath == personalPath {
+		t.Errorf("work and personal both resolved to %q, want distinct cache files", workPath)
+	}
+	if workPath == noAccount {
+		t.Errorf("work resolved to the no-account path %q", noAccount)
+	}
+	if personalPath == noAccount {
+		t.Errorf("personal resolved to the no-account path %q", noAccount)
+	}
+}
+
+// A snapshot with no account keeps its title exactly as today; one with an
+// account is qualified with the " · " separator the codebase already uses
+// for a qualified label.
+func TestPanelTitle(t *testing.T) {
+	if got, want := panelTitle("CLAUDE", ""), "CLAUDE"; got != want {
+		t.Errorf("panelTitle(CLAUDE, \"\") = %q, want %q", got, want)
+	}
+	if got, want := panelTitle("CLAUDE", "work"), "CLAUDE · work"; got != want {
+		t.Errorf("panelTitle(CLAUDE, work) = %q, want %q", got, want)
+	}
+}
+
 // An account is user-config input, not a trusted path fragment: it must stay
 // a single filename component so it can never steer the cache outside its
 // directory or into an arbitrary subdirectory.
@@ -1216,5 +1272,70 @@ func TestConfigFileSuppliesHistoryPath(t *testing.T) {
 	setConfigValues(t, loadConfig(configPath()))
 	if got, want := defaultHistoryPath(), filepath.Join(home, ".cache", "quotatop", "history.jsonl"); got != want {
 		t.Errorf("defaultHistoryPath = %q, want the file's value %q", got, want)
+	}
+}
+
+func TestSettingsWithPrefixFromConfigFileOnly(t *testing.T) {
+	setConfigValues(t, map[string]string{
+		"QUOTATOP_CLAUDE_ACCOUNT_work":     "/creds/work.json",
+		"QUOTATOP_CLAUDE_ACCOUNT_personal": "/creds/personal.json",
+		"QUOTATOP_CODEX_ROOTS":             "/irrelevant",
+	})
+	isolateAccountEnv(t)
+	got := settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
+	want := map[string]string{"work": "/creds/work.json", "personal": "/creds/personal.json"}
+	if len(got) != len(want) || got["work"] != want["work"] || got["personal"] != want["personal"] {
+		t.Errorf("settingsWithPrefix = %#v, want %#v", got, want)
+	}
+}
+
+func TestSettingsWithPrefixFromEnvironmentOnly(t *testing.T) {
+	setConfigValues(t, nil)
+	t.Setenv("QUOTATOP_CLAUDE_ACCOUNT_work", "/creds/work.json")
+	got := settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
+	if got["work"] != "/creds/work.json" {
+		t.Errorf("settingsWithPrefix = %#v, want the environment value", got)
+	}
+}
+
+func TestSettingsWithPrefixEnvironmentOverridesFileForSameLabel(t *testing.T) {
+	setConfigValues(t, map[string]string{"QUOTATOP_CLAUDE_ACCOUNT_work": "/creds/from-file.json"})
+	t.Setenv("QUOTATOP_CLAUDE_ACCOUNT_work", "/creds/from-env.json")
+	got := settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
+	if got["work"] != "/creds/from-env.json" {
+		t.Errorf("settingsWithPrefix[work] = %q, want the environment value to win", got["work"])
+	}
+}
+
+func TestSettingsWithPrefixEmptyEnvironmentDisablesFileDeclaredLabel(t *testing.T) {
+	setConfigValues(t, map[string]string{"QUOTATOP_CLAUDE_ACCOUNT_work": "/creds/from-file.json"})
+	t.Setenv("QUOTATOP_CLAUDE_ACCOUNT_work", "")
+	got := settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
+	if _, ok := got["work"]; ok {
+		t.Errorf("settingsWithPrefix = %#v, want an empty environment variable to remove the label", got)
+	}
+}
+
+func TestSettingsWithPrefixEmptySuffixIsSkipped(t *testing.T) {
+	setConfigValues(t, map[string]string{"QUOTATOP_CLAUDE_ACCOUNT_": "/creds/no-label.json"})
+	isolateAccountEnv(t)
+	got := settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
+	if len(got) != 0 {
+		t.Errorf("settingsWithPrefix = %#v, want the empty-suffix entry skipped", got)
+	}
+}
+
+func TestSettingsWithPrefixNilConfigValues(t *testing.T) {
+	setConfigValues(t, nil)
+	isolateAccountEnv(t)
+	got := settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
+	if len(got) != 0 {
+		t.Errorf("settingsWithPrefix with nil configValues and no matching env = %#v, want empty", got)
+	}
+	t.Setenv("QUOTATOP_CLAUDE_ACCOUNT_work", "/creds/work.json")
+	isolateAccountEnv(t, "QUOTATOP_CLAUDE_ACCOUNT_work")
+	got = settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
+	if got["work"] != "/creds/work.json" {
+		t.Errorf("settingsWithPrefix with nil configValues = %#v, want the environment alone", got)
 	}
 }

@@ -40,7 +40,7 @@ func windowExpired(length time.Duration, observed, now time.Time) bool {
 // Snapshot is everything one source knows right now.
 type Snapshot struct {
 	Source       string // "claude" or "codex"
-	Account      string // "" until a later round adds multi-account configuration
+	Account      string // "" unless multi-account configuration names this source
 	Title        string
 	Chip         string // plan or similar, shown in the panel's top-right
 	Windows      []Window
@@ -66,6 +66,16 @@ func (s Snapshot) Identity() string {
 		return s.Source
 	}
 	return s.Source + "/" + s.Account
+}
+
+// panelTitle renders a source's panel title: base unchanged with no account,
+// else base qualified with the account using the same " · " separator the
+// codebase already uses for a qualified label (e.g. "Weekly · Fable").
+func panelTitle(base, account string) string {
+	if account == "" {
+		return base
+	}
+	return base + " · " + account
 }
 
 // --- Claude ---------------------------------------------------------------
@@ -133,26 +143,24 @@ type claudeSource struct {
 	doRequest       func(*http.Request) (*http.Response, error)
 	credentialsPath string
 	cacheDir        string // base directory the cache file lives in; "" disables the cache entirely
-	account         string // "" until a later round adds multi-account configuration
+	account         string // "" unless multi-account configuration names this source
 }
 
 // claudeCacheFileName names the on-disk cache for one Claude account. An
 // empty account keeps today's shared filename, so the empty-account path
-// never changes; a future non-empty account gets a file of its own, so
-// reading a second account can never write its numbers into the first
-// account's cache -- observed live on this host, where a shared cache made a
-// plain read report the wrong account's quota for the whole 10-minute cache
-// lifetime.
+// never changes; a non-empty account gets a file of its own, so reading a
+// second account can never write its numbers into the first account's cache
+// -- observed live on this host, where a shared cache made a plain read
+// report the wrong account's quota for the whole 10-minute cache lifetime.
 //
 // account is interpolated into the filename, not a path, so any path
 // separator in it is percent-encoded first: an account of "../../secrets" or
 // one containing "/" must stay a single filename component, never a way to
 // steer the cache outside its directory. Accounts come from the user's
-// config file, so this boundary has to hold even though nothing sets a
-// non-empty account yet. Percent-encoding (rather than replacing separators
-// with a fixed character) keeps the mapping injective: "%" is escaped first,
-// so two distinct accounts -- e.g. "a/b" and "a_b" -- can never collapse
-// onto the same filename and share a cache.
+// config file, so this boundary has to hold. Percent-encoding (rather than
+// replacing separators with a fixed character) keeps the mapping injective:
+// "%" is escaped first, so two distinct accounts -- e.g. "a/b" and "a_b" --
+// can never collapse onto the same filename and share a cache.
 func claudeCacheFileName(account string) string {
 	if account == "" {
 		return "claude-quota.json"
@@ -282,7 +290,7 @@ func (s claudeSource) writeCache(payload claudePayload, fetchedAt time.Time) {
 }
 
 func (s claudeSource) fetch(fresh bool) Snapshot {
-	snap := Snapshot{Source: "claude", Account: s.account, Title: "CLAUDE", Verb: "fetched", At: time.Now(),
+	snap := Snapshot{Source: "claude", Account: s.account, Title: panelTitle("CLAUDE", s.account), Verb: "fetched", At: time.Now(),
 		Footnote: "account · 10m cache"}
 	now := time.Now()
 	if !fresh {
@@ -441,6 +449,7 @@ type codexSource struct {
 	extraRoots  []string      // QUOTATOP_CODEX_ROOTS glob matches; kind "extra"
 	timeout     time.Duration // bounds the walk; zero uses codexScanTimeout
 	blockScan   func()        // test hook: run at the top of the scan, may block
+	account     string        // "" unless multi-account configuration names this source
 }
 
 // codexScanTimeout bounds the walk. The scan runs in-process now, so an
@@ -477,33 +486,39 @@ func defaultCodexSource() codexSource {
 	if home != "" {
 		source.defaultRoot = filepath.Join(home, "sessions")
 	}
-	// QUOTATOP_CODEX_ROOTS is a ':'-separated list of glob patterns, each
-	// match being another session root to walk like the default. A pattern
-	// matching nothing is ignored: sandbox run directories are routinely
-	// gone before we look at them.
-	//
-	// A leading ~/ in each element is expanded before globbing, per element
-	// rather than once for the whole value. A POSIX shell already does that
-	// after a ':' in an assignment (which is how PATH=~/bin:~/.local/bin
-	// works), so an environment value with a home-relative second root
-	// already works today; the config file has no shell, so without this a
-	// value like /var/tmp/...:~/.claude/codex-quota would hand a literal
-	// ~ to filepath.Glob, which matches nothing and is silently ignored --
-	// a degraded reading with no error to explain it.
-	if raw := setting("QUOTATOP_CODEX_ROOTS"); raw != "" {
-		for _, pattern := range strings.Split(raw, ":") {
-			if pattern == "" {
-				continue
-			}
-			pattern = expandTilde(pattern)
-			matches, err := filepath.Glob(pattern)
-			if err != nil {
-				continue
-			}
-			source.extraRoots = append(source.extraRoots, matches...)
-		}
-	}
+	source.extraRoots = parseCodexRoots(setting("QUOTATOP_CODEX_ROOTS"))
 	return source
+}
+
+// parseCodexRoots parses a ':'-separated list of glob patterns, each match
+// being another session root to walk like the default. A pattern matching
+// nothing is ignored: sandbox run directories are routinely gone before we
+// look at them. This is the one parser for the format, shared by
+// QUOTATOP_CODEX_ROOTS and every QUOTATOP_CODEX_ACCOUNT_<label> value, which
+// use the exact same grammar.
+//
+// A leading ~/ in each element is expanded before globbing, per element
+// rather than once for the whole value. A POSIX shell already does that
+// after a ':' in an assignment (which is how PATH=~/bin:~/.local/bin
+// works), so an environment value with a home-relative second root
+// already works today; the config file has no shell, so without this a
+// value like /var/tmp/...:~/.claude/codex-quota would hand a literal
+// ~ to filepath.Glob, which matches nothing and is silently ignored --
+// a degraded reading with no error to explain it.
+func parseCodexRoots(raw string) []string {
+	var roots []string
+	for _, pattern := range strings.Split(raw, ":") {
+		if pattern == "" {
+			continue
+		}
+		pattern = expandTilde(pattern)
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			continue
+		}
+		roots = append(roots, matches...)
+	}
+	return roots
 }
 
 // fetchCodex reads the local session logs directly. There is no server to
@@ -587,7 +602,7 @@ func (r *codexReport) consider(row codexRow, path, root string) {
 
 // scan runs the root walk and fills snap with the result.
 func (s codexSource) scan() (snap Snapshot) {
-	snap = Snapshot{Source: "codex", Title: "CODEX", Verb: "reported", At: time.Now(),
+	snap = Snapshot{Source: "codex", Account: s.account, Title: panelTitle("CODEX", s.account), Verb: "reported", At: time.Now(),
 		Footnote: "local"}
 	if s.blockScan != nil {
 		s.blockScan()
@@ -690,7 +705,7 @@ func (s codexSource) fetch() Snapshot {
 	case snap := <-done:
 		return snap
 	case <-ctx.Done():
-		return Snapshot{Source: "codex", Title: "CODEX", At: time.Now(),
+		return Snapshot{Source: "codex", Account: s.account, Title: panelTitle("CODEX", s.account), At: time.Now(),
 			Err: errors.New("Codex log scan timed out")}
 	}
 }

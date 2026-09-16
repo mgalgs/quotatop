@@ -10,6 +10,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -53,12 +54,65 @@ type model struct {
 
 // defaultSources is the one place that names the sources this build knows how
 // to fetch, so the TUI and the non-interactive --json path stay in lockstep:
-// whatever is added here shows up in both.
+// whatever is added here shows up in both. Claude's accounts (if any) always
+// precede Codex's, preserving today's source order.
 func defaultSources() []sourceState {
-	return []sourceState{
-		{fetch: fetchClaude},
-		{fetch: func(bool) Snapshot { return fetchCodex() }},
+	return append(claudeSourceStates(), codexSourceStates()...)
+}
+
+// sortedLabels returns accounts' keys in ascending byte order, so the panel
+// order is stable across runs and machines.
+func sortedLabels(accounts map[string]string) []string {
+	labels := make([]string, 0, len(accounts))
+	for label := range accounts {
+		labels = append(labels, label)
 	}
+	sort.Strings(labels)
+	return labels
+}
+
+// claudeSourceStates builds one sourceState per QUOTATOP_CLAUDE_ACCOUNT_
+// label, sorted by label. Declaring any account replaces today's single
+// unnamed entry entirely: QUOTATOP_CLAUDE_CREDENTIALS is not consulted when
+// accounts are configured.
+func claudeSourceStates() []sourceState {
+	accounts := settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
+	if len(accounts) == 0 {
+		return []sourceState{{fetch: fetchClaude}}
+	}
+	states := make([]sourceState, 0, len(accounts))
+	for _, label := range sortedLabels(accounts) {
+		source := defaultClaudeSource()
+		source.credentialsPath = accounts[label]
+		source.account = label
+		states = append(states, sourceState{fetch: source.fetch})
+	}
+	return states
+}
+
+// codexSourceStates builds one sourceState per QUOTATOP_CODEX_ACCOUNT_
+// label, sorted by label. Each value is parsed with the same glob-list
+// grammar as QUOTATOP_CODEX_ROOTS. A named account replaces today's single
+// unnamed entry entirely and is not layered onto the interactive default
+// root, so two named accounts never scan and report the same session files.
+func codexSourceStates() []sourceState {
+	accounts := settingsWithPrefix("QUOTATOP_CODEX_ACCOUNT_")
+	if len(accounts) == 0 {
+		return []sourceState{{fetch: func(bool) Snapshot { return fetchCodex() }}}
+	}
+	states := make([]sourceState, 0, len(accounts))
+	for _, label := range sortedLabels(accounts) {
+		raw := accounts[label]
+		// The glob is re-parsed on every fetch, not once here: it is the
+		// same reason fetchCodex() calls defaultCodexSource() fresh each
+		// time rather than caching its roots -- a sandbox/agent run
+		// directory the pattern matches can appear after startup, and a
+		// value parsed once at construction would never see it.
+		states = append(states, sourceState{fetch: func(bool) Snapshot {
+			return codexSource{extraRoots: parseCodexRoots(raw), account: label}.fetch()
+		}})
+	}
+	return states
 }
 
 func newModel(interval time.Duration, history *History) model {
@@ -244,7 +298,7 @@ func main() {
 		fmt.Fprint(flag.CommandLine.Output(), usageText)
 		flag.PrintDefaults()
 	}
-	interval := flag.Duration("interval", 20*time.Second, "how often to poll both sources")
+	interval := flag.Duration("interval", 20*time.Second, "how often to poll all sources")
 	snapshot := flag.Bool("snapshot", false, "render one frame to stdout and exit (no TUI)")
 	jsonOutput := flag.Bool("json", false, "write one JSON document to stdout and exit (no TUI)")
 	fresh := flag.Bool("fresh", false, "bypass the Claude 10-minute quota cache on the first read")
