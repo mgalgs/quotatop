@@ -178,6 +178,91 @@ func TestViewFitsTerminalWidth(t *testing.T) {
 	}
 }
 
+func TestGridColumnsAndRowWidthsMatchOldTwoPanelLadder(t *testing.T) {
+	for _, width := range []int{94, 132} {
+		if cols := gridColumns(width, 2); cols != 2 {
+			t.Errorf("gridColumns(%d, 2) = %d, want 2", width, cols)
+		}
+		half := (width - panelGap) / 2
+		other := width - panelGap - half
+		widths := rowWidths(width, 2)
+		if len(widths) != 2 || widths[0] != half || widths[1] != other {
+			t.Errorf("rowWidths(%d, 2) = %v, want [%d %d]", width, widths, half, other)
+		}
+	}
+
+	width := 60
+	if cols := gridColumns(width, 2); cols != 1 {
+		t.Errorf("gridColumns(%d, 2) = %d, want 1", width, cols)
+	}
+	widths := rowWidths(width, 1)
+	if len(widths) != 1 || widths[0] != width {
+		t.Errorf("rowWidths(%d, 1) = %v, want [%d]", width, widths, width)
+	}
+}
+
+func TestGridChunksThreePanelsIntoTwoRows(t *testing.T) {
+	width, n := 132, 3
+	cols := gridColumns(width, n)
+	if cols != 2 {
+		t.Fatalf("gridColumns(%d, %d) = %d, want 2", width, n, cols)
+	}
+
+	var rowSizes []int
+	for start := 0; start < n; start += cols {
+		end := start + cols
+		if end > n {
+			end = n
+		}
+		rowSizes = append(rowSizes, end-start)
+	}
+	if want := []int{2, 1}; len(rowSizes) != len(want) || rowSizes[0] != want[0] || rowSizes[1] != want[1] {
+		t.Fatalf("row sizes = %v, want %v", rowSizes, want)
+	}
+
+	lastRow := rowWidths(width, rowSizes[len(rowSizes)-1])
+	if len(lastRow) != 1 || lastRow[0] != width {
+		t.Errorf("lone final-row panel width = %v, want [%d]", lastRow, width)
+	}
+}
+
+func TestGridChunksFivePanelsAsTwoTwoOne(t *testing.T) {
+	width, n := 132, 5
+	cols := gridColumns(width, n)
+
+	var rowSizes []int
+	for start := 0; start < n; start += cols {
+		end := start + cols
+		if end > n {
+			end = n
+		}
+		rowSizes = append(rowSizes, end-start)
+	}
+	want := []int{2, 2, 1}
+	if len(rowSizes) != len(want) {
+		t.Fatalf("row sizes = %v, want %v", rowSizes, want)
+	}
+	for i := range want {
+		if rowSizes[i] != want[i] {
+			t.Errorf("row %d has %d panels, want %d (all sizes=%v)", i, rowSizes[i], want[i], rowSizes)
+		}
+	}
+}
+
+func TestRowWidthsSumToFullWidthIncludingGaps(t *testing.T) {
+	width := 132
+	for _, k := range []int{1, 2, 3} {
+		widths := rowWidths(width, k)
+		sum := 0
+		for _, w := range widths {
+			sum += w
+		}
+		if got := sum + (k-1)*panelGap; got != width {
+			t.Errorf("k=%d: widths %v sum to %d plus gaps = %d, want %d", k, widths, sum, got, width)
+		}
+	}
+}
+
 func TestTruncateLeavesNoResetOnPlainText(t *testing.T) {
 	if got := truncate("hello world", 5); got != "hello" {
 		t.Errorf("truncate plain = %q, want %q", got, "hello")
