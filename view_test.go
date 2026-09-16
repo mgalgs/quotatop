@@ -144,7 +144,7 @@ func TestTightestIgnoresExpiredWindows(t *testing.T) {
 
 // A blocked source must say so, in the prominent slot, ahead of an ordinary
 // Warning when both are present -- the block is the actionable one.
-func TestPanelBlockedSourceWinsOverWarning(t *testing.T) {
+func TestPanelBlockedSourceAlsoShowsWarning(t *testing.T) {
 	now := time.Now()
 	history := loadHistory("")
 	snap := demoSnapshot(now)
@@ -154,8 +154,8 @@ func TestPanelBlockedSourceWinsOverWarning(t *testing.T) {
 	if !strings.Contains(rendered, "workspace member usage limit reached") {
 		t.Errorf("panel does not humanize/render the block:\n%s", rendered)
 	}
-	if strings.Contains(rendered, "a log is cut off") {
-		t.Errorf("panel rendered the Warning even though a block took the slot:\n%s", rendered)
+	if !strings.Contains(rendered, "a log is cut off") {
+		t.Errorf("panel dropped the Warning even though a block is also present:\n%s", rendered)
 	}
 }
 

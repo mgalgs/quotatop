@@ -199,7 +199,15 @@ func windowLines(width int, source string, window Window, history *History, now 
 		barPct = 0
 	}
 
-	spark := sparkline(history.Trend(source+"/"+window.Key, window.Percent, sparkWidth))
+	// A sparkline ending at the current reading is itself a claim about the
+	// live window, so it is withheld on expiry for the same reason the gauge
+	// and the projection are: it would sit right next to the withheld
+	// percentage, plotting the exact number the heading just refused to
+	// state.
+	spark := ""
+	if !window.Expired {
+		spark = sparkline(history.Trend(source+"/"+window.Key, window.Percent, sparkWidth))
+	}
 	label := styleTxt.Render(window.Label)
 	fill := width - lipgloss.Width(label) - lipgloss.Width(spark) - lipgloss.Width(right) - 2
 	if fill < 1 {
@@ -291,9 +299,14 @@ func panel(width int, snap *Snapshot, history *History, now time.Time, loading b
 			}
 			body = append(body, windowLines(content, snap.Source, window, history, now)...)
 		}
+		// A block and a warning are independent facts -- the only warning the
+		// codex scanner raises is that a log is cut off, which is a caveat on
+		// everything else in the panel, including a block riding on that same
+		// truncated log. Neither should swallow the other.
 		if snap.LimitReached != "" {
 			body = append(body, "", styleErr.Render(truncate("blocked: "+humanizeReason(snap.LimitReached), content)))
-		} else if snap.Warning != "" {
+		}
+		if snap.Warning != "" {
 			body = append(body, "", styleWrn.Render(truncate(snap.Warning, content)))
 		}
 	}

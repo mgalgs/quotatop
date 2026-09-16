@@ -116,13 +116,21 @@ func encodeJSONSource(snap Snapshot, history *History, now time.Time) jsonSource
 }
 
 func encodeJSONWindow(source string, window Window, history *History, now time.Time) jsonWindow {
+	// A projection is itself a percentage claim, so it is withheld for an
+	// expired window the same way view.go withholds the gauge and the
+	// percent text -- a forecast derived from a discarded reading is worse
+	// than no forecast.
+	projection := jsonProjection{}
+	if !window.Expired {
+		projection = encodeJSONProjection(history.Project(source, window, now), window.ResetsAt)
+	}
 	encoded := jsonWindow{
 		Key:        window.Key,
 		Label:      window.Label,
 		Percent:    window.Percent,
 		Note:       window.Note,
 		Expired:    window.Expired,
-		Projection: encodeJSONProjection(history.Project(source, window, now), window.ResetsAt),
+		Projection: projection,
 	}
 	if !window.ResetsAt.IsZero() {
 		resetsAt := jsonTime(window.ResetsAt)

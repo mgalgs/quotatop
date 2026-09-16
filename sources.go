@@ -393,8 +393,11 @@ const codexScanTimeout = 25 * time.Second
 
 // codexReachedStaleAfter bounds how long a rate_limit_reached_type signal is
 // still taken at face value. 168h is the weekly window, the longest length
-// this scanner ever labels; past that, whatever window produced the block
-// has certainly reset even without a fresher row around to confirm it.
+// Codex is known to report in practice; past that, whatever window produced
+// the block has certainly reset even without a fresher row around to confirm
+// it. This is an empirical bound, not a guarantee from the schema: the
+// default case below labels arbitrary window_minutes values, so a longer
+// window is not structurally impossible, just not one this scanner has seen.
 const codexReachedStaleAfter = 168 * time.Hour
 
 // defaultCodexSource works out the roots from the environment.
@@ -483,6 +486,18 @@ func (r *codexReport) consider(row codexRow, path, root string) {
 			r.reachedType = *rl.RateLimitReachedType
 			r.reachedAt = timestamp
 		}
+	} else if timestamp.After(r.reachedAt) {
+		// A row with rate limits but no reached type is the log's ordinary
+		// way of saying the account is not (or no longer) blocked. It must
+		// win over a strictly older blocked row, or a block can never clear
+		// once a row that carries it is followed only by unblocked rows on
+		// non-"codex" limit_ids. A tie is left alone rather than treated as
+		// clearing evidence: consider() only sees one row at a time, so a
+		// tie carries no ordering information about which row is the "real"
+		// state at that instant, and TestCodexBlockSurvivesReplacementByATiedNormalRow
+		// pins a tied normal row to not clear a same-instant block.
+		r.reachedType = ""
+		r.reachedAt = timestamp
 	}
 	if rl.LimitID != nil && *rl.LimitID != "codex" {
 		return
@@ -579,6 +594,11 @@ func (s codexSource) scan() (snap Snapshot) {
 		if entry.window.ResetsAt != nil {
 			window.ResetsAt = time.Unix(int64(*entry.window.ResetsAt), 0)
 			if !window.ResetsAt.After(now) {
+				// The reported reset instant is definitive evidence the
+				// window has rolled over, even when the window's length is
+				// unknown or the observation is too recent for the
+				// length-based check above to catch it.
+				window.Expired = true
 				window.Note = "reset time has passed; awaiting a new report"
 			}
 		}
