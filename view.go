@@ -435,7 +435,6 @@ func (m model) helpBody(width int) string {
 	for _, source := range m.sources {
 		if source.snap != nil && source.snap.Source == "codex" && source.snap.Detail != "" {
 			body = append(body, styleDim.Render("codex source "+shortenPath(source.snap.Detail)))
-			break
 		}
 	}
 	return box(width, styleTxt.Bold(true).Render("KEYS"), "", body, "", "")
@@ -529,7 +528,13 @@ func (m model) View() string {
 				}
 				parts = append(parts, panel(widths[i], source.snap, m.history, m.now, source.loading))
 			}
-			rows = append(rows, lipgloss.JoinHorizontal(lipgloss.Top, parts...))
+			joined := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
+			// A short trailing row is narrower than width by design (see above),
+			// so it is padded out here rather than left for PlaceHorizontal
+			// below: that helper centres each line independently, and would
+			// otherwise float this row's panels away from the column they sit
+			// under.
+			rows = append(rows, lipgloss.NewStyle().Width(width).Render(joined))
 		}
 	}
 	panels := strings.Join(rows, "\n\n")

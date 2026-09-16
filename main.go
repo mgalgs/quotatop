@@ -51,6 +51,16 @@ type model struct {
 	showHelp bool
 }
 
+// defaultSources is the one place that names the sources this build knows how
+// to fetch, so the TUI and the non-interactive --json path stay in lockstep:
+// whatever is added here shows up in both.
+func defaultSources() []sourceState {
+	return []sourceState{
+		{fetch: fetchClaude},
+		{fetch: func(bool) Snapshot { return fetchCodex() }},
+	}
+}
+
 func newModel(interval time.Duration, history *History) model {
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
@@ -62,15 +72,16 @@ func newModel(interval time.Duration, history *History) model {
 	}
 	now := time.Now()
 	due := now.Add(interval)
+	sources := defaultSources()
+	for i := range sources {
+		// Init fires every fetch immediately, so each source has to start in
+		// the loading state: otherwise the first tick sees idle sources that
+		// are already due and fires a duplicate round.
+		sources[i].loading, sources[i].due = true, due
+	}
 	return model{
 		host: host, interval: interval, history: history, spinner: spin, now: now,
-		sources: []sourceState{
-			// Init fires both fetches immediately, so each source has to start
-			// in the loading state: otherwise the first tick sees idle sources
-			// that are already due and fires a duplicate pair.
-			{loading: true, due: due, fetch: fetchClaude},
-			{loading: true, due: due, fetch: func(bool) Snapshot { return fetchCodex() }},
-		},
+		sources: sources,
 	}
 }
 
@@ -274,26 +285,27 @@ func main() {
 	}
 }
 
-// renderJSON fetches the two independent sources concurrently so status-line
-// callers do not wait for one source before reading the other.
+// renderJSON fetches every source from the same list the TUI uses, and
+// concurrently, so status-line callers do not wait for one source before
+// reading the other.
 func renderJSON(history *History, fresh, recordHistory bool) int {
-	var claude, codex Snapshot
+	sources := defaultSources()
+	snaps := make([]Snapshot, len(sources))
 	var wait sync.WaitGroup
-	wait.Add(2)
-	go func() {
-		defer wait.Done()
-		claude = fetchClaude(fresh)
-	}()
-	go func() {
-		defer wait.Done()
-		codex = fetchCodex()
-	}()
+	wait.Add(len(sources))
+	for i, source := range sources {
+		i, source := i, source
+		go func() {
+			defer wait.Done()
+			snaps[i] = source.fetch(fresh)
+		}()
+	}
 	wait.Wait()
-	recordJSONSnapshots(history, []Snapshot{claude, codex}, recordHistory)
+	recordJSONSnapshots(history, snaps, recordHistory)
 
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(encodeJSON([]Snapshot{claude, codex}, history, time.Now())); err != nil {
+	if err := encoder.Encode(encodeJSON(snaps, history, time.Now())); err != nil {
 		fmt.Fprintln(os.Stderr, "quotatop:", err)
 		return 1
 	}

@@ -261,6 +261,80 @@ func TestViewRendersFivePanelsAsTwoTwoOne(t *testing.T) {
 	}
 }
 
+// visualColumn returns the on-screen column at which substr starts in line,
+// accounting for ANSI escapes (which contribute no width) ahead of it.
+func visualColumn(t *testing.T, line, substr string) int {
+	t.Helper()
+	idx := strings.Index(line, substr)
+	if idx < 0 {
+		t.Fatalf("substring %q not found in %q", substr, line)
+	}
+	return lipgloss.Width(line[:idx])
+}
+
+// A trailing row narrower than a full row must still start its panel under
+// the same column as the row above it, and that panel must keep a full row's
+// column width rather than stretching to fill the terminal. This only shows
+// up once the terminal is wider than maxLayout, which is where View() hands
+// a ragged-width block to lipgloss.PlaceHorizontal -- a helper that recentres
+// each line independently, so a short line drifts away from the column it
+// belongs under unless every line was padded to the same width first.
+func TestViewTrailingRowStaysUnderFullRowColumn(t *testing.T) {
+	now := time.Now()
+	m := newModel(20*time.Second, loadHistory(""))
+	m.width, m.now = 180, now
+	m.sources = gridSources(now, 3)
+
+	cols := gridColumns(maxLayout, 3)
+	colWidths := rowWidths(maxLayout, cols)
+
+	var topBorders []string
+	for _, line := range strings.Split(m.View(), "\n") {
+		if strings.Contains(line, "╭") {
+			topBorders = append(topBorders, line)
+		}
+	}
+	if len(topBorders) != 2 {
+		t.Fatalf("got %d top-border lines, want 2 (a full row and a trailing row)", len(topBorders))
+	}
+	fullRow, trailingRow := topBorders[0], topBorders[1]
+
+	fullStart := visualColumn(t, fullRow, "╭")
+	trailingStart := visualColumn(t, trailingRow, "╭")
+	if trailingStart != fullStart {
+		t.Errorf("trailing row panel starts at column %d, full row's first panel at %d; want them aligned",
+			trailingStart, fullStart)
+	}
+
+	startByte := strings.Index(trailingRow, "╭")
+	endByte := strings.Index(trailingRow, "╮") + len("╮")
+	trailingWidth := lipgloss.Width(trailingRow[startByte:endByte])
+	if trailingWidth != colWidths[0] {
+		t.Errorf("trailing row panel width = %d, want %d (a full row's column width, not stretched)",
+			trailingWidth, colWidths[0])
+	}
+}
+
+// The help panel's codex source line must list every codex source, not stop
+// after the first: a model can carry more than one, and going silent about
+// the rest is a silently wrong help line rather than a missing one.
+func TestHelpBodyListsEveryCodexSourceDetail(t *testing.T) {
+	now := time.Now()
+	m := newModel(20*time.Second, loadHistory(""))
+	m.now, m.showHelp = now, true
+	m.sources = []sourceState{
+		{snap: &Snapshot{Source: "codex", Title: "CODEX 1", Detail: "/first/session.jsonl"}},
+		{snap: &Snapshot{Source: "codex", Title: "CODEX 2", Detail: "/second/session.jsonl"}},
+	}
+	body := m.helpBody(100)
+	if !strings.Contains(body, "/first/session.jsonl") {
+		t.Errorf("help body missing the first codex source's detail:\n%s", body)
+	}
+	if !strings.Contains(body, "/second/session.jsonl") {
+		t.Errorf("help body missing the second codex source's detail:\n%s", body)
+	}
+}
+
 func TestRowWidthsSumToFullWidthIncludingGaps(t *testing.T) {
 	width := 132
 	for _, k := range []int{1, 2, 3} {
