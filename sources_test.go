@@ -1218,3 +1218,64 @@ func TestConfigFileSuppliesHistoryPath(t *testing.T) {
 		t.Errorf("defaultHistoryPath = %q, want the file's value %q", got, want)
 	}
 }
+
+func TestSettingsWithPrefixFromConfigFileOnly(t *testing.T) {
+	setConfigValues(t, map[string]string{
+		"QUOTATOP_CLAUDE_ACCOUNT_work":     "/creds/work.json",
+		"QUOTATOP_CLAUDE_ACCOUNT_personal": "/creds/personal.json",
+		"QUOTATOP_CODEX_ROOTS":             "/irrelevant",
+	})
+	got := settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
+	want := map[string]string{"work": "/creds/work.json", "personal": "/creds/personal.json"}
+	if len(got) != len(want) || got["work"] != want["work"] || got["personal"] != want["personal"] {
+		t.Errorf("settingsWithPrefix = %#v, want %#v", got, want)
+	}
+}
+
+func TestSettingsWithPrefixFromEnvironmentOnly(t *testing.T) {
+	setConfigValues(t, nil)
+	t.Setenv("QUOTATOP_CLAUDE_ACCOUNT_work", "/creds/work.json")
+	got := settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
+	if got["work"] != "/creds/work.json" {
+		t.Errorf("settingsWithPrefix = %#v, want the environment value", got)
+	}
+}
+
+func TestSettingsWithPrefixEnvironmentOverridesFileForSameLabel(t *testing.T) {
+	setConfigValues(t, map[string]string{"QUOTATOP_CLAUDE_ACCOUNT_work": "/creds/from-file.json"})
+	t.Setenv("QUOTATOP_CLAUDE_ACCOUNT_work", "/creds/from-env.json")
+	got := settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
+	if got["work"] != "/creds/from-env.json" {
+		t.Errorf("settingsWithPrefix[work] = %q, want the environment value to win", got["work"])
+	}
+}
+
+func TestSettingsWithPrefixEmptyEnvironmentDisablesFileDeclaredLabel(t *testing.T) {
+	setConfigValues(t, map[string]string{"QUOTATOP_CLAUDE_ACCOUNT_work": "/creds/from-file.json"})
+	t.Setenv("QUOTATOP_CLAUDE_ACCOUNT_work", "")
+	got := settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
+	if _, ok := got["work"]; ok {
+		t.Errorf("settingsWithPrefix = %#v, want an empty environment variable to remove the label", got)
+	}
+}
+
+func TestSettingsWithPrefixEmptySuffixIsSkipped(t *testing.T) {
+	setConfigValues(t, map[string]string{"QUOTATOP_CLAUDE_ACCOUNT_": "/creds/no-label.json"})
+	got := settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
+	if len(got) != 0 {
+		t.Errorf("settingsWithPrefix = %#v, want the empty-suffix entry skipped", got)
+	}
+}
+
+func TestSettingsWithPrefixNilConfigValues(t *testing.T) {
+	setConfigValues(t, nil)
+	got := settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
+	if len(got) != 0 {
+		t.Errorf("settingsWithPrefix with nil configValues and no matching env = %#v, want empty", got)
+	}
+	t.Setenv("QUOTATOP_CLAUDE_ACCOUNT_work", "/creds/work.json")
+	got = settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
+	if got["work"] != "/creds/work.json" {
+		t.Errorf("settingsWithPrefix with nil configValues = %#v, want the environment alone", got)
+	}
+}

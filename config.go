@@ -80,6 +80,45 @@ func setting(key string) string {
 	return configValues[key]
 }
 
+// settingsWithPrefix returns every setting whose key starts with prefix,
+// keyed by the remainder of the key after the prefix -- the account label for
+// a QUOTATOP_CLAUDE_ACCOUNT_<label> or QUOTATOP_CODEX_ACCOUNT_<label> key.
+// configValues supplies the starting set (already expandTilde-treated by
+// loadConfig); the environment is then overlaid on top, key by key, the same
+// precedence setting() gives a single-valued key. An empty value -- from
+// either source -- counts as unset and removes the entry, so a cleared
+// environment variable can disable an account the config file declares. A
+// suffix that is empty after trimming names no account and is skipped. Works
+// when configValues is nil.
+func settingsWithPrefix(prefix string) map[string]string {
+	result := map[string]string{}
+	apply := func(key, value string) {
+		if !strings.HasPrefix(key, prefix) {
+			return
+		}
+		suffix := strings.TrimSpace(key[len(prefix):])
+		if suffix == "" {
+			return
+		}
+		if value == "" {
+			delete(result, suffix)
+			return
+		}
+		result[suffix] = value
+	}
+	for key, value := range configValues {
+		apply(key, value)
+	}
+	for _, entry := range os.Environ() {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		apply(key, expandTilde(value))
+	}
+	return result
+}
+
 // expandTilde replaces a leading ~/ in path with the home directory, the
 // way a shell does. Nothing else is interpreted: a bare ~ or a ~user form is
 // left alone, and a tilde anywhere but at the start is not touched.
