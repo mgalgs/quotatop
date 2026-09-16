@@ -143,6 +143,11 @@ everywhere that account's sessions live, or the panel finds nothing.
 A labelled panel's title gains `· <label>`, and its `--json` entry gains an
 `account` field carrying the label — see below.
 
+Setting a label's environment variable to the empty string disables it even
+when the config file declares it, the same way an empty `QUOTATOP_CODEX_ROOTS`
+would — useful for turning an account off on one machine without editing the
+shared config file.
+
 ## Trend and burn rate
 
 Every percentage change is appended to `~/.cache/quotatop/history.jsonl`
@@ -190,9 +195,10 @@ The document is versioned (`"schema": 1`) and stable. Three rules for consumers:
   Claude or Codex account, per `QUOTATOP_CLAUDE_ACCOUNT_<label>` /
   `QUOTATOP_CODEX_ACCOUNT_<label>` (see Configuration above); `select(.source==
   "claude")` then matches all of them at once. Disambiguate with `account`
-  (the label, empty when unconfigured) or match `id` instead, which is
-  `source` alone with no account configured and `source/account` once one is
-  — `claude`, or `claude/work` and `claude/personal`.
+  (the label; the key is omitted entirely when unconfigured, not an empty
+  string) or match `id` instead, which is `source` alone with no account
+  configured and `source/account` once one is — `claude`, or `claude/work`
+  and `claude/personal`.
 - **Iterate windows and match on `key`; never index by position.** A source can
   gain or lose a window — `weekly_scoped` only exists while a model-scoped
   weekly bar is active.

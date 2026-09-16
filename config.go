@@ -93,10 +93,11 @@ var settingsWithPrefixEnvKeys map[string]bool
 // keyed by the remainder of the key after the prefix -- the account label for
 // a QUOTATOP_CLAUDE_ACCOUNT_<label> or QUOTATOP_CODEX_ACCOUNT_<label> key.
 // configValues supplies the starting set (already expandTilde-treated by
-// loadConfig); the environment is then overlaid on top, key by key, the same
-// precedence setting() gives a single-valued key. An empty value -- from
-// either source -- counts as unset and removes the entry, so a cleared
-// environment variable can disable an account the config file declares. A
+// loadConfig); the environment is then overlaid on top, key by key. An empty
+// value -- from either source -- counts as unset and removes the entry, so a
+// cleared environment variable can disable an account the config file
+// declares -- unlike setting(), where an empty environment variable falls
+// back to the config file instead of deleting the value. A
 // suffix that is empty after trimming names no account and is skipped. Works
 // when configValues is nil.
 func settingsWithPrefix(prefix string) map[string]string {

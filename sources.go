@@ -40,7 +40,7 @@ func windowExpired(length time.Duration, observed, now time.Time) bool {
 // Snapshot is everything one source knows right now.
 type Snapshot struct {
 	Source       string // "claude" or "codex"
-	Account      string // "" until a later round adds multi-account configuration
+	Account      string // "" unless multi-account configuration names this source
 	Title        string
 	Chip         string // plan or similar, shown in the panel's top-right
 	Windows      []Window
@@ -143,26 +143,24 @@ type claudeSource struct {
 	doRequest       func(*http.Request) (*http.Response, error)
 	credentialsPath string
 	cacheDir        string // base directory the cache file lives in; "" disables the cache entirely
-	account         string // "" until a later round adds multi-account configuration
+	account         string // "" unless multi-account configuration names this source
 }
 
 // claudeCacheFileName names the on-disk cache for one Claude account. An
 // empty account keeps today's shared filename, so the empty-account path
-// never changes; a future non-empty account gets a file of its own, so
-// reading a second account can never write its numbers into the first
-// account's cache -- observed live on this host, where a shared cache made a
-// plain read report the wrong account's quota for the whole 10-minute cache
-// lifetime.
+// never changes; a non-empty account gets a file of its own, so reading a
+// second account can never write its numbers into the first account's cache
+// -- observed live on this host, where a shared cache made a plain read
+// report the wrong account's quota for the whole 10-minute cache lifetime.
 //
 // account is interpolated into the filename, not a path, so any path
 // separator in it is percent-encoded first: an account of "../../secrets" or
 // one containing "/" must stay a single filename component, never a way to
 // steer the cache outside its directory. Accounts come from the user's
-// config file, so this boundary has to hold even though nothing sets a
-// non-empty account yet. Percent-encoding (rather than replacing separators
-// with a fixed character) keeps the mapping injective: "%" is escaped first,
-// so two distinct accounts -- e.g. "a/b" and "a_b" -- can never collapse
-// onto the same filename and share a cache.
+// config file, so this boundary has to hold. Percent-encoding (rather than
+// replacing separators with a fixed character) keeps the mapping injective:
+// "%" is escaped first, so two distinct accounts -- e.g. "a/b" and "a_b" --
+// can never collapse onto the same filename and share a cache.
 func claudeCacheFileName(account string) string {
 	if account == "" {
 		return "claude-quota.json"
@@ -451,7 +449,7 @@ type codexSource struct {
 	extraRoots  []string      // QUOTATOP_CODEX_ROOTS glob matches; kind "extra"
 	timeout     time.Duration // bounds the walk; zero uses codexScanTimeout
 	blockScan   func()        // test hook: run at the top of the scan, may block
-	account     string        // "" until a later round adds multi-account configuration
+	account     string        // "" unless multi-account configuration names this source
 }
 
 // codexScanTimeout bounds the walk. The scan runs in-process now, so an

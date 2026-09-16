@@ -18,6 +18,8 @@ func TestDefaultSourcesWithNoAccountsMatchesTodaysBehavior(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("CODEX_HOME", "")
+	t.Setenv("QUOTATOP_CLAUDE_CREDENTIALS", "")
+	t.Setenv("QUOTATOP_CODEX_ROOTS", "")
 	setConfigValues(t, nil)
 	isolateAccountEnv(t)
 

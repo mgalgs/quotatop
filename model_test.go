@@ -11,6 +11,7 @@ import (
 func key(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
 
 func TestQuitKeysReturnQuit(t *testing.T) {
+	isolateAccountEnv(t)
 	for _, msg := range []tea.KeyMsg{key("q"), {Type: tea.KeyEsc}, {Type: tea.KeyCtrlC}} {
 		_, cmd := newModel(time.Second, loadHistory("")).Update(msg)
 		if cmd == nil {
@@ -23,6 +24,7 @@ func TestQuitKeysReturnQuit(t *testing.T) {
 }
 
 func TestQuestionMarkTogglesHelp(t *testing.T) {
+	isolateAccountEnv(t)
 	updated, _ := newModel(time.Second, loadHistory("")).Update(key("?"))
 	if !updated.(model).showHelp {
 		t.Error("? did not open help")
@@ -36,6 +38,7 @@ func TestQuestionMarkTogglesHelp(t *testing.T) {
 // The model starts in the loading state because Init fires both fetches. A tick
 // arriving before those land must not start a second pair.
 func TestPollingDoesNotDoubleFetch(t *testing.T) {
+	isolateAccountEnv(t)
 	m := newModel(20*time.Second, loadHistory(""))
 	if !m.sources[0].loading || !m.sources[1].loading {
 		t.Fatal("a freshly built model is not marked as loading")
@@ -73,6 +76,7 @@ func TestPollingDoesNotDoubleFetch(t *testing.T) {
 // same Source string (a future round's two Claude accounts) must still land
 // in the slot the message names, and every other slot must stay untouched.
 func TestSnapshotMsgRoutesByIndexNotSource(t *testing.T) {
+	isolateAccountEnv(t)
 	m := newModel(20*time.Second, loadHistory(""))
 	m.sources = []sourceState{
 		{loading: true, snap: nil, fetch: m.sources[0].fetch},
@@ -98,6 +102,7 @@ func TestSnapshotMsgRoutesByIndexNotSource(t *testing.T) {
 // A message naming a slot that does not exist must be ignored, not panic --
 // this path will grow more senders as more sources are added.
 func TestSnapshotMsgOutOfRangeIndexIsIgnored(t *testing.T) {
+	isolateAccountEnv(t)
 	m := newModel(20*time.Second, loadHistory(""))
 	before := append([]sourceState(nil), m.sources...)
 	updated, cmd := m.Update(snapshotMsg{index: 5, snap: Snapshot{Source: "claude"}})
@@ -116,6 +121,7 @@ func TestSnapshotMsgOutOfRangeIndexIsIgnored(t *testing.T) {
 }
 
 func TestNextRefreshWithNoSourcesReturnsFutureTime(t *testing.T) {
+	isolateAccountEnv(t)
 	m := newModel(20*time.Second, loadHistory(""))
 	m.now = time.Now()
 	m.sources = nil
@@ -129,6 +135,7 @@ func TestNextRefreshWithNoSourcesReturnsFutureTime(t *testing.T) {
 }
 
 func TestSpinnerTicksAreDroppedWhenIdle(t *testing.T) {
+	isolateAccountEnv(t)
 	m := newModel(time.Second, loadHistory(""))
 	m.sources[0].loading, m.sources[1].loading = false, false
 	if _, cmd := m.Update(m.spinner.Tick()); cmd != nil {
@@ -139,6 +146,7 @@ func TestSpinnerTicksAreDroppedWhenIdle(t *testing.T) {
 // The longest key list is exactly as wide as the column it sat in, so it used
 // to run straight into its description.
 func TestHelpRowsKeepAGapAfterTheKeyList(t *testing.T) {
+	isolateAccountEnv(t)
 	m := newModel(time.Second, loadHistory(""))
 	m.width, m.now, m.showHelp = 100, time.Now(), true
 	if view := m.View(); !strings.Contains(view, "q / esc / ctrl-c  quit") {
