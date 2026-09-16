@@ -26,6 +26,14 @@ const (
 	sampleMaxAge     = 9 * 24 * time.Hour // a touch over the longest (weekly) window
 )
 
+// historyKey names one window's slot in the trend history: the snapshot's
+// identity (a source, or "source/account" once accounts exist) plus the
+// window's own key. Every read and write site builds a key through this
+// function, so the key format has exactly one definition to change.
+func historyKey(identity, windowKey string) string {
+	return identity + "/" + windowKey
+}
+
 // History keeps the recent trend of every window, on disk so a restart does not
 // blank the sparklines and the burn rate.
 type History struct {
@@ -239,10 +247,13 @@ func (h *History) compact() error {
 	return nil
 }
 
-// Trend returns the recent percentages for a key, oldest first, with the
-// current value appended so the newest point is always live.
-func (h *History) Trend(key string, current float64, limit int) []float64 {
-	samples := h.data[key]
+// Trend returns the recent percentages for one window, oldest first, with
+// the current value appended so the newest point is always live. It takes
+// the bare identity and window key, the same shape as Project, and builds
+// the storage key itself so historyKey has exactly one call site per read
+// or write, not a copy at every caller.
+func (h *History) Trend(identity, windowKey string, current float64, limit int) []float64 {
+	samples := h.data[historyKey(identity, windowKey)]
 	points := make([]float64, 0, len(samples)+1)
 	for _, record := range samples {
 		points = append(points, record.Pct)
@@ -336,14 +347,14 @@ func finishProjection(current, rate float64, resetsAt, now time.Time) Projection
 // The live model fits a rate over the samples since the window last reset. A
 // window reset is a sharp drop, and averaging across one would report a
 // meaningless negative burn, so everything before the last drop is discarded.
-func (h *History) Project(source string, window Window, now time.Time) Projection {
+func (h *History) Project(identity string, window Window, now time.Time) Projection {
 	if rate, ok := sustainedRate(window, now); ok {
 		projection := finishProjection(window.Percent, rate, window.ResetsAt, now)
 		projection.Sustained = true
 		return projection
 	}
 
-	points := append([]sample{}, h.data[source+"/"+window.Key]...)
+	points := append([]sample{}, h.data[historyKey(identity, window.Key)]...)
 	current := window.Percent
 	if n := len(points); n == 0 || points[n-1].Pct != current {
 		points = append(points, sample{T: now, Pct: current})

@@ -159,13 +159,18 @@ quotatop --json | jq '.sources[] | select(.source=="claude") | .windows[]
                       | select(.key=="weekly_all") | .percent'
 ```
 
-The document is versioned (`"schema": 1`) and stable. Two rules for consumers:
+The document is versioned (`"schema": 1`) and stable. Three rules for consumers:
 
 - **Iterate windows and match on `key`; never index by position.** A source can
   gain or lose a window — `weekly_scoped` only exists while a model-scoped
   weekly bar is active.
 - **`projection` is always an object, never null.** Check `valid` before
   reading the rest of it.
+- **`sources` can hold more than one entry with the same `source`.** Once
+  multi-account configuration exists, each configured Claude account gets its
+  own entry; disambiguate with `account` (omitted for the single unnamed
+  account, as `sources[].source=="claude"` has always meant so far), never
+  with `title`, which is a display string.
 
 A window's `expired` (bool, omitted when false) means the window has certainly
 reset since this percentage was observed — either the reading outlived the

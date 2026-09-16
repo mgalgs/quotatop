@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"sort"
 	"time"
 )
 
@@ -15,6 +16,7 @@ type jsonDoc struct {
 
 type jsonSource struct {
 	Source             string       `json:"source"`
+	Account            string       `json:"account,omitempty"`
 	Title              string       `json:"title"`
 	Plan               string       `json:"plan"`
 	Verb               string       `json:"verb"`
@@ -51,30 +53,59 @@ type jsonProjection struct {
 	GapSeconds          *int64   `json:"gap_seconds,omitempty"`
 }
 
-// encodeJSON builds the schema-1 document from two snapshots. It is pure:
-// now and the history are passed in so tests need no clock and no files.
-func encodeJSON(snaps []Snapshot, history *History, now time.Time) jsonDoc {
-	bySource := make(map[string]Snapshot, len(snaps))
-	for _, snap := range snaps {
-		if _, exists := bySource[snap.Source]; !exists {
-			bySource[snap.Source] = snap
-		}
-	}
+// expectedSources is the fixed set of sources a document always reports on,
+// claude before codex; a source with no snapshot at all still gets an entry,
+// synthesised as unavailable.
+var expectedSources = []string{"claude", "codex"}
 
+// encodeJSON builds the schema-1 document from the given snapshots. It is
+// pure: now and the history are passed in so tests need no clock and no
+// files. Every expected source is named even when absent from snaps, and
+// snaps may hold more than one snapshot for the same source; either way, the
+// output is ordered claude before codex.
+func encodeJSON(snaps []Snapshot, history *History, now time.Time) jsonDoc {
+	ordered := orderedSnapshots(snaps)
 	doc := jsonDoc{
 		Schema:           1,
 		GeneratedAt:      jsonTime(now),
 		GeneratedAtEpoch: now.Unix(),
-		Sources:          make([]jsonSource, 0, 2),
+		Sources:          make([]jsonSource, 0, len(ordered)),
 	}
-	for _, source := range []string{"claude", "codex"} {
-		snap, ok := bySource[source]
-		if !ok {
-			snap = Snapshot{Source: source, Title: sourceTitle(source), Err: errors.New("source unavailable")}
-		}
+	for _, snap := range ordered {
 		doc.Sources = append(doc.Sources, encodeJSONSource(snap, history, now))
 	}
 	return doc
+}
+
+// orderedSnapshots returns snaps in claude-before-codex order, synthesising
+// a placeholder for any expected source with no snapshot at all -- keyed off
+// which sources are expected, not which are present. The sort is stable and
+// keyed on source rank alone, so multiple snapshots of the same source keep
+// the relative order they arrived in. This is a deterministic rule over the
+// input, never map iteration, which Go randomises.
+func orderedSnapshots(snaps []Snapshot) []Snapshot {
+	present := make(map[string]bool, len(expectedSources))
+	for _, snap := range snaps {
+		present[snap.Source] = true
+	}
+	ordered := append([]Snapshot{}, snaps...)
+	for _, source := range expectedSources {
+		if !present[source] {
+			ordered = append(ordered, Snapshot{Source: source, Title: sourceTitle(source), Err: errors.New("source unavailable")})
+		}
+	}
+	rank := func(source string) int {
+		for i, candidate := range expectedSources {
+			if candidate == source {
+				return i
+			}
+		}
+		return len(expectedSources)
+	}
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return rank(ordered[i].Source) < rank(ordered[j].Source)
+	})
+	return ordered
 }
 
 func sourceTitle(source string) string {
@@ -87,6 +118,7 @@ func sourceTitle(source string) string {
 func encodeJSONSource(snap Snapshot, history *History, now time.Time) jsonSource {
 	source := jsonSource{
 		Source:       snap.Source,
+		Account:      snap.Account,
 		Title:        snap.Title,
 		Plan:         snap.Chip,
 		Verb:         snap.Verb,
@@ -110,19 +142,19 @@ func encodeJSONSource(snap Snapshot, history *History, now time.Time) jsonSource
 		return source
 	}
 	for _, window := range snap.Windows {
-		source.Windows = append(source.Windows, encodeJSONWindow(snap.Source, window, history, now))
+		source.Windows = append(source.Windows, encodeJSONWindow(snap.Identity(), window, history, now))
 	}
 	return source
 }
 
-func encodeJSONWindow(source string, window Window, history *History, now time.Time) jsonWindow {
+func encodeJSONWindow(identity string, window Window, history *History, now time.Time) jsonWindow {
 	// A projection is itself a percentage claim, so it is withheld for an
 	// expired window the same way view.go withholds the gauge and the
 	// percent text -- a forecast derived from a discarded reading is worse
 	// than no forecast.
 	projection := jsonProjection{}
 	if !window.Expired {
-		projection = encodeJSONProjection(history.Project(source, window, now), window.ResetsAt)
+		projection = encodeJSONProjection(history.Project(identity, window, now), window.ResetsAt)
 	}
 	encoded := jsonWindow{
 		Key:        window.Key,

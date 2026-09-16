@@ -191,6 +191,58 @@ func TestEncodeJSONExpiredAndLimitReachedAreOmittedWhenZero(t *testing.T) {
 	}
 }
 
+// The empty account (today's only account) must keep the exact history key
+// format quotatop has always written: no doubled separator, no suffix.
+// Every future non-empty-account key still goes through the same helper, so
+// pinning this string is what stops the write and read sites from ever
+// drifting apart again.
+func TestHistoryKeyEmptyAccountFormat(t *testing.T) {
+	identity := Snapshot{Source: "claude"}.Identity()
+	if identity != "claude" {
+		t.Fatalf("Identity() with no account = %q, want %q", identity, "claude")
+	}
+	if got, want := historyKey(identity, "weekly_all"), "claude/weekly_all"; got != want {
+		t.Errorf("historyKey = %q, want %q", got, want)
+	}
+}
+
+// encodeJSON must be able to represent two snapshots of the same source --
+// the capability this round exists to add -- and must do so deterministically,
+// not via map iteration order.
+func TestEncodeJSONSameSourceTwiceReturnsBoth(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	first := Snapshot{Source: "claude", Account: "work", Title: "CLAUDE (work)", Windows: []Window{{Key: "session", Percent: 10}}}
+	second := Snapshot{Source: "claude", Account: "personal", Title: "CLAUDE (personal)", Windows: []Window{{Key: "session", Percent: 20}}}
+	doc := encodeJSON([]Snapshot{first, second, {Source: "codex"}}, loadHistory(""), now)
+	if len(doc.Sources) != 3 {
+		t.Fatalf("len(doc.Sources) = %d, want 3", len(doc.Sources))
+	}
+	if doc.Sources[0].Account != "work" || doc.Sources[1].Account != "personal" {
+		t.Fatalf("sources = %#v, want account to disambiguate both claude snapshots", doc.Sources)
+	}
+	if doc.Sources[0].Title != "CLAUDE (work)" || doc.Sources[1].Title != "CLAUDE (personal)" {
+		t.Fatalf("sources = %#v, want both claude snapshots in input order", doc.Sources)
+	}
+	if doc.Sources[2].Source != "codex" {
+		t.Fatalf("third source = %#v, want codex", doc.Sources[2])
+	}
+}
+
+// A source entirely absent from the given snapshots -- not merely one that
+// errored -- must still be synthesised as unavailable, keyed off which
+// sources are expected rather than which are present.
+func TestEncodeJSONSynthesizesPlaceholderForAbsentSource(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	doc := encodeJSON([]Snapshot{{Source: "claude", Windows: []Window{{Key: "session", Percent: 10}}}}, loadHistory(""), now)
+	if len(doc.Sources) != 2 {
+		t.Fatalf("len(doc.Sources) = %d, want 2", len(doc.Sources))
+	}
+	codex := doc.Sources[1]
+	if codex.Source != "codex" || codex.Error == "" {
+		t.Fatalf("synthesised codex source = %#v, want a placeholder with an error", codex)
+	}
+}
+
 func TestJSONHistoryDoesNotRecordWhenDisabledAndCleansUp(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "history.jsonl")
 	now := time.Now().Truncate(time.Second)
@@ -220,7 +272,7 @@ func TestJSONHistoryDoesNotRecordWhenDisabledAndCleansUp(t *testing.T) {
 	if len(after) >= len(before) {
 		t.Fatalf("append-only history was not compacted: %d >= %d bytes", len(after), len(before))
 	}
-	if got := loadHistory(path).Trend("claude/session", 10, 10); len(got) != 1 || got[0] != 10 {
+	if got := loadHistory(path).Trend("claude", "session", 10, 10); len(got) != 1 || got[0] != 10 {
 		t.Fatalf("cleaned history lost new JSON sample: %v", got)
 	}
 }
