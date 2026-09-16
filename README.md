@@ -158,12 +158,13 @@ restart instead of an hour later.
 
 The rate comes from one of two models. Long windows (24h or more) are projected
 from their own elapsed pace — the current percentage divided by the hours since
-the window opened — because a weekly window's elapsed time already contains the
-nights and days away from the keyboard, and extrapolating a working-hours slope
-across mostly-sleep time overstates the burn; these are labelled `avg`. Shorter
-windows keep the live slope, fitted over the samples since the window last
-reset — a reset is a sharp drop, and averaging across one would report a
-meaningless negative burn.
+history last saw the window at zero (falling back to when the window opened if
+history does not reach that far back) — because a weekly window's elapsed time
+already contains the nights and days away from the keyboard, and extrapolating
+a working-hours slope across mostly-sleep time overstates the burn; these are
+labelled `avg`. Shorter windows keep the live slope, fitted over the samples
+since the window last reset — a reset is a sharp drop, and averaging across one
+would report a meaningless negative burn.
 
 Either way the result is `→ ~38% at reset`, or a red `→ full in 1d 7h` when the
 window will not survive the pace. Where there is a reset deadline to measure
