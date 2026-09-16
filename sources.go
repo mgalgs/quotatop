@@ -391,6 +391,12 @@ type codexSource struct {
 // into total failures that drop the last good reading.
 const codexScanTimeout = 25 * time.Second
 
+// codexReachedStaleAfter bounds how long a rate_limit_reached_type signal is
+// still taken at face value. 168h is the weekly window, the longest length
+// this scanner ever labels; past that, whatever window produced the block
+// has certainly reset even without a fresher row around to confirm it.
+const codexReachedStaleAfter = 168 * time.Hour
+
 // defaultCodexSource works out the roots from the environment.
 func defaultCodexSource() codexSource {
 	var source codexSource
@@ -459,17 +465,23 @@ func (r *codexReport) consider(row codexRow, path, root string) {
 	if rl == nil {
 		return
 	}
+	// Parsed once, above the early returns that need it: a row whose
+	// timestamp does not parse is skipped entirely, since with a zero time it
+	// would beat every older dated row and its reading would be reported as
+	// "just now" no matter how old it actually is.
+	timestamp, err := time.Parse(time.RFC3339, row.Timestamp)
+	if err != nil {
+		return
+	}
 	// A blocked signal is captured before the limit_id filter below rejects
 	// the row: the reached-type row is routinely a "premium" limit_id row
 	// with both windows null, which must still be rejected for percentage
 	// purposes but which is exactly the row that says the account is
 	// blocked.
 	if rl.RateLimitReachedType != nil && *rl.RateLimitReachedType != "" {
-		if timestamp, err := time.Parse(time.RFC3339, row.Timestamp); err == nil {
-			if !timestamp.Before(r.reachedAt) {
-				r.reachedType = *rl.RateLimitReachedType
-				r.reachedAt = timestamp
-			}
+		if !timestamp.Before(r.reachedAt) {
+			r.reachedType = *rl.RateLimitReachedType
+			r.reachedAt = timestamp
 		}
 	}
 	if rl.LimitID != nil && *rl.LimitID != "codex" {
@@ -478,12 +490,6 @@ func (r *codexReport) consider(row codexRow, path, root string) {
 	if (rl.Primary == nil || rl.Primary.UsedPercent == nil) &&
 		(rl.Secondary == nil || rl.Secondary.UsedPercent == nil) {
 		return
-	}
-	timestamp, err := time.Parse(time.RFC3339, row.Timestamp)
-	if err != nil {
-		return // a row whose timestamp does not parse is skipped: with a zero
-		// time it would beat every older dated row and its reading would be
-		// reported as "just now" no matter how old it actually is
 	}
 	if r.path == "" || !timestamp.Before(r.timestamp) {
 		var planType string
@@ -535,8 +541,13 @@ func (s codexSource) scan() (snap Snapshot) {
 	snap.Detail = report.path
 	// A blocked signal only counts if it is at least as new as the reading:
 	// an hour-old block followed by a fresh normal row means the block is
-	// over.
-	if report.reachedType != "" && !report.reachedAt.Before(report.timestamp) {
+	// over. It also only counts against the wall clock, not just the
+	// reading: a block with nothing newer in the log goes stale exactly like
+	// any other window, since whatever window produced it has certainly
+	// rolled over by codexReachedStaleAfter -- the longest window this
+	// scanner ever labels -- even with no fresher row around to say so.
+	if report.reachedType != "" && !report.reachedAt.Before(report.timestamp) &&
+		!windowExpired(codexReachedStaleAfter, report.reachedAt, snap.At) {
 		snap.LimitReached = report.reachedType
 	}
 	now := time.Now()

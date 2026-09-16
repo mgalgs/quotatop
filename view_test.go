@@ -106,6 +106,42 @@ func TestWindowLinesExpiredWindowHidesPercentageAndGauge(t *testing.T) {
 	}
 }
 
+// An expired window must not extrapolate a burn projection from the very
+// percentage it just withheld: the panel would then refuse to state the
+// number and immediately forecast from it in the next line.
+func TestWindowLinesExpiredWindowSuppressesProjection(t *testing.T) {
+	now := time.Now()
+	history := loadHistory("")
+	history.data["claude/session"] = []sample{{T: now.Add(-time.Hour), Pct: 60}}
+	window := Window{Key: "session", Label: "5-hour", Percent: 90, Length: 5 * time.Hour,
+		ResetsAt: now.Add(-time.Hour), Expired: true}
+	lines := windowLines(60, "claude", window, history, now)
+	for _, line := range lines {
+		if strings.Contains(line, "%/h") {
+			t.Errorf("lines = %v, want no burn projection for an expired window", lines)
+		}
+	}
+}
+
+// The footer's "tightest" readout, the panel title colour and the header
+// mark all rank windows by Percent to decide what needs attention; none of
+// them may let an expired window's stale percentage win that ranking over a
+// live one -- that is the dead-window-reported-as-current bug relocated from
+// the bar to the rest of the screen.
+func TestTightestIgnoresExpiredWindows(t *testing.T) {
+	now := time.Now()
+	m := newModel(20*time.Second, loadHistory(""))
+	m.now = now
+	m.claude = &Snapshot{Source: "claude", Title: "CLAUDE", Observed: now,
+		Windows: []Window{{Key: "session", Label: "5-hour", Percent: 97, Expired: true}}}
+	m.codex = &Snapshot{Source: "codex", Title: "CODEX", Observed: now,
+		Windows: []Window{{Key: "primary", Label: "5-hour", Percent: 10}}}
+	name, worst, found := m.tightest()
+	if !found || worst != 10 || name != "CODEX 5-hour" {
+		t.Errorf("tightest() = (%q, %v, %v), want the live 10%% window, not the expired 97%%", name, worst, found)
+	}
+}
+
 // A blocked source must say so, in the prominent slot, ahead of an ordinary
 // Warning when both are present -- the block is the actionable one.
 func TestPanelBlockedSourceWinsOverWarning(t *testing.T) {

@@ -216,22 +216,27 @@ func windowLines(width int, source string, window Window, history *History, now 
 	full := styleDim.Render(resetText(window.ResetsAt, now, false))
 	brief := styleDim.Render(resetText(window.ResetsAt, now, true))
 	candidates := []string{full, brief}
-	projection := history.Project(source, window, now)
-	if text, gap, urgent := projectionText(projection, window.ResetsAt, now); text != "" {
-		style := styleDim
-		if urgent {
-			style = styleErr
-		}
-		separator := styleDim.Render(" · ")
-		candidates = append([]string{
-			full + separator + style.Render(text),
-			brief + separator + style.Render(text),
-		}, candidates...)
-		if gap != "" {
+	// An expired window's percentage is already withheld above; a burn
+	// projection is itself a percentage claim, so it is withheld too rather
+	// than extrapolating from the discarded reading.
+	if !window.Expired {
+		projection := history.Project(source, window, now)
+		if text, gap, urgent := projectionText(projection, window.ResetsAt, now); text != "" {
+			style := styleDim
+			if urgent {
+				style = styleErr
+			}
+			separator := styleDim.Render(" · ")
 			candidates = append([]string{
-				full + separator + style.Render(text+gap),
-				brief + separator + style.Render(text+gap),
+				full + separator + style.Render(text),
+				brief + separator + style.Render(text),
 			}, candidates...)
+			if gap != "" {
+				candidates = append([]string{
+					full + separator + style.Render(text+gap),
+					brief + separator + style.Render(text+gap),
+				}, candidates...)
+			}
 		}
 	}
 	detail := candidates[len(candidates)-1]
@@ -265,6 +270,9 @@ func panel(width int, snap *Snapshot, history *History, now time.Time, loading b
 
 	worst := 0.0
 	for _, window := range snap.Windows {
+		if window.Expired {
+			continue
+		}
 		worst = math.Max(worst, window.Percent)
 	}
 	title := lipgloss.NewStyle().Foreground(gradientAt(worst / 100).color()).Bold(true).Render(snap.Title)
@@ -318,6 +326,9 @@ func (m model) headerLine(width int) string {
 			continue
 		}
 		for _, window := range snap.Windows {
+			if window.Expired {
+				continue
+			}
 			worst = math.Max(worst, window.Percent)
 		}
 	}
@@ -351,6 +362,9 @@ func (m model) tightest() (string, float64, bool) {
 			continue
 		}
 		for _, window := range snap.Windows {
+			if window.Expired {
+				continue
+			}
 			if window.Percent > worst {
 				name, worst, found = snap.Title+" "+window.Label, window.Percent, true
 			}
