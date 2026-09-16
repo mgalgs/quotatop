@@ -201,50 +201,62 @@ func TestGridColumnsAndRowWidthsMatchOldTwoPanelLadder(t *testing.T) {
 	}
 }
 
-func TestGridChunksThreePanelsIntoTwoRows(t *testing.T) {
-	width, n := 132, 3
-	cols := gridColumns(width, n)
-	if cols != 2 {
-		t.Fatalf("gridColumns(%d, %d) = %d, want 2", width, n, cols)
+// gridSources builds n sourceStates with distinct fixed snapshots, for tests
+// that need View() itself to render a specific panel count.
+func gridSources(now time.Time, n int) []sourceState {
+	sources := make([]sourceState, n)
+	for i := range sources {
+		sources[i] = sourceState{snap: &Snapshot{
+			Source: "claude", Title: fmt.Sprintf("S%d", i), Observed: now,
+			Windows: []Window{{Key: "session", Label: "5-hour", Percent: 10}},
+		}}
 	}
+	return sources
+}
 
-	var rowSizes []int
-	for start := 0; start < n; start += cols {
-		end := start + cols
-		if end > n {
-			end = n
+// topBorderCounts renders m and returns, for every line that opens a panel
+// row (contains the box's top-left corner), how many panels start on that
+// line -- i.e. the row's panel count, in row order.
+func topBorderCounts(view string) []int {
+	var counts []int
+	for _, line := range strings.Split(view, "\n") {
+		if n := strings.Count(line, "╭"); n > 0 {
+			counts = append(counts, n)
 		}
-		rowSizes = append(rowSizes, end-start)
 	}
-	if want := []int{2, 1}; len(rowSizes) != len(want) || rowSizes[0] != want[0] || rowSizes[1] != want[1] {
-		t.Fatalf("row sizes = %v, want %v", rowSizes, want)
-	}
+	return counts
+}
 
-	lastRow := rowWidths(width, rowSizes[len(rowSizes)-1])
-	if len(lastRow) != 1 || lastRow[0] != width {
-		t.Errorf("lone final-row panel width = %v, want [%d]", lastRow, width)
+// This exercises View() itself, not a copy of its chunking loop: a
+// regression in the loop at view.go (e.g. one panel per row) would change
+// what actually gets rendered, and only a test that calls View() can catch
+// that.
+func TestViewRendersThreePanelsAsTwoRows(t *testing.T) {
+	now := time.Now()
+	m := newModel(20*time.Second, loadHistory(""))
+	m.width, m.now = 132, now
+	m.sources = gridSources(now, 3)
+
+	got := topBorderCounts(m.View())
+	if want := []int{2, 1}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("row panel counts = %v, want %v", got, want)
 	}
 }
 
-func TestGridChunksFivePanelsAsTwoTwoOne(t *testing.T) {
-	width, n := 132, 5
-	cols := gridColumns(width, n)
+func TestViewRendersFivePanelsAsTwoTwoOne(t *testing.T) {
+	now := time.Now()
+	m := newModel(20*time.Second, loadHistory(""))
+	m.width, m.now = 132, now
+	m.sources = gridSources(now, 5)
 
-	var rowSizes []int
-	for start := 0; start < n; start += cols {
-		end := start + cols
-		if end > n {
-			end = n
-		}
-		rowSizes = append(rowSizes, end-start)
-	}
+	got := topBorderCounts(m.View())
 	want := []int{2, 2, 1}
-	if len(rowSizes) != len(want) {
-		t.Fatalf("row sizes = %v, want %v", rowSizes, want)
+	if len(got) != len(want) {
+		t.Fatalf("row panel counts = %v, want %v", got, want)
 	}
 	for i := range want {
-		if rowSizes[i] != want[i] {
-			t.Errorf("row %d has %d panels, want %d (all sizes=%v)", i, rowSizes[i], want[i], rowSizes)
+		if got[i] != want[i] {
+			t.Errorf("row %d has %d panels, want %d (all rows=%v)", i, got[i], want[i], got)
 		}
 	}
 }

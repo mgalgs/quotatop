@@ -328,15 +328,18 @@ func renderSnapshot(m model, width int, fresh bool) int {
 	m.width = width
 	m.now = time.Now()
 
-	claude := fetchClaude(fresh)
-	codex := fetchCodex()
-	m.record(&claude)
-	m.record(&codex)
-	m.sources[0].snap, m.sources[0].loading = &claude, false
-	m.sources[1].snap, m.sources[1].loading = &codex, false
+	failed := false
+	for i := range m.sources {
+		snap := m.sources[i].fetch(fresh)
+		m.record(&snap)
+		m.sources[i].snap, m.sources[i].loading = &snap, false
+		if snap.Err != nil {
+			failed = true
+		}
+	}
 
 	fmt.Println(strings.TrimRight(m.View(), "\n"))
-	if claude.Err != nil || codex.Err != nil {
+	if failed {
 		return 1
 	}
 	return 0

@@ -99,7 +99,7 @@ func TestSnapshotMsgRoutesByIndexNotSource(t *testing.T) {
 // this path will grow more senders as more sources are added.
 func TestSnapshotMsgOutOfRangeIndexIsIgnored(t *testing.T) {
 	m := newModel(20*time.Second, loadHistory(""))
-	before := m.sources
+	before := append([]sourceState(nil), m.sources...)
 	updated, cmd := m.Update(snapshotMsg{index: 5, snap: Snapshot{Source: "claude"}})
 	after := updated.(model)
 	if cmd != nil {

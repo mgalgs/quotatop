@@ -433,7 +433,7 @@ func (m model) helpBody(width int) string {
 			compactDuration(m.interval), shortenPath(m.history.path))),
 		styleDim.Render("5-hour rate from the last 90m · weekly from the window's own elapsed pace"))
 	for _, source := range m.sources {
-		if source.snap != nil && source.snap.Identity() == "codex" && source.snap.Detail != "" {
+		if source.snap != nil && source.snap.Source == "codex" && source.snap.Detail != "" {
 			body = append(body, styleDim.Render("codex source "+shortenPath(source.snap.Detail)))
 			break
 		}
@@ -473,7 +473,12 @@ func gridColumns(width, n int) int {
 // rowWidths splits width across a row of k panels with panelGap between
 // each. Every panel gets usable/k, except the last, which takes whatever
 // division rounded away, so a row's widths always sum to width exactly.
+// k < 1 is clamped to 1, matching gridColumns' own floor, so a caller that
+// forgets to check does not panic on widths[-1].
 func rowWidths(width, k int) []int {
+	if k < 1 {
+		k = 1
+	}
 	usable := width - (k-1)*panelGap
 	each := usable / k
 	widths := make([]int, k)
@@ -503,13 +508,20 @@ func (m model) View() string {
 	var rows []string
 	if n := len(m.sources); n > 0 {
 		cols := gridColumns(width, n)
+		// Sized once for a full row of cols panels: a short trailing row (the
+		// last row of an n not divisible by cols) gets the same per-panel
+		// width as every row above it, rather than stretching to fill the
+		// width, so a gauge's bar length stays comparable at a glance across
+		// every panel on screen. The trailing row is simply narrower than the
+		// terminal; nothing fills the gap.
+		colWidths := rowWidths(width, cols)
 		for start := 0; start < n; start += cols {
 			end := start + cols
 			if end > n {
 				end = n
 			}
 			row := m.sources[start:end]
-			widths := rowWidths(width, len(row))
+			widths := colWidths[:len(row)]
 			parts := make([]string, 0, len(row)*2-1)
 			for i, source := range row {
 				if i > 0 {
