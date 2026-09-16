@@ -23,7 +23,21 @@ import (
 
 type tickMsg time.Time
 
-type snapshotMsg struct{ snap Snapshot }
+type snapshotMsg struct {
+	index int
+	snap  Snapshot
+}
+
+// sourceState is one source's own slice of the model: its latest snapshot,
+// whether a fetch for it is in flight, when it is next due, and how to fetch
+// it. The model holds an ordered slice of these instead of source-named
+// fields, so it can carry any number of sources.
+type sourceState struct {
+	snap    *Snapshot
+	loading bool
+	due     time.Time
+	fetch   func(fresh bool) Snapshot
+}
 
 type model struct {
 	width, height int
@@ -33,10 +47,18 @@ type model struct {
 	spinner       spinner.Model
 	now           time.Time
 
-	claude, codex               *Snapshot
-	loadingClaude, loadingCodex bool
-	claudeDue, codexDue         time.Time
-	showHelp                    bool
+	sources  []sourceState
+	showHelp bool
+}
+
+// defaultSources is the one place that names the sources this build knows how
+// to fetch, so the TUI and the non-interactive --json path stay in lockstep:
+// whatever is added here shows up in both.
+func defaultSources() []sourceState {
+	return []sourceState{
+		{fetch: fetchClaude},
+		{fetch: func(bool) Snapshot { return fetchCodex() }},
+	}
 }
 
 func newModel(interval time.Duration, history *History) model {
@@ -49,32 +71,42 @@ func newModel(interval time.Duration, history *History) model {
 		host = ""
 	}
 	now := time.Now()
+	due := now.Add(interval)
+	sources := defaultSources()
+	for i := range sources {
+		// Init fires every fetch immediately, so each source has to start in
+		// the loading state: otherwise the first tick sees idle sources that
+		// are already due and fires a duplicate round.
+		sources[i].loading, sources[i].due = true, due
+	}
 	return model{
 		host: host, interval: interval, history: history, spinner: spin, now: now,
-		// Init fires both fetches immediately, so the model has to start in the
-		// loading state: otherwise the first tick sees idle sources that are
-		// already due and fires a duplicate pair.
-		loadingClaude: true, loadingCodex: true,
-		claudeDue: now.Add(interval),
-		codexDue:  now.Add(interval),
+		sources: sources,
 	}
 }
 
-func (m model) busy() bool { return m.loadingClaude || m.loadingCodex }
+func (m model) busy() bool {
+	for _, source := range m.sources {
+		if source.loading {
+			return true
+		}
+	}
+	return false
+}
 
 func (m model) nextRefresh() time.Time {
-	if m.claudeDue.Before(m.codexDue) {
-		return m.claudeDue
+	next := m.now.Add(m.interval)
+	found := false
+	for _, source := range m.sources {
+		if !found || source.due.Before(next) {
+			next, found = source.due, true
+		}
 	}
-	return m.codexDue
+	return next
 }
 
-func claudeCmd(fresh bool) tea.Cmd {
-	return func() tea.Msg { return snapshotMsg{fetchClaude(fresh)} }
-}
-
-func codexCmd() tea.Cmd {
-	return func() tea.Msg { return snapshotMsg{fetchCodex()} }
+func sourceCmd(index int, source sourceState, fresh bool) tea.Cmd {
+	return func() tea.Msg { return snapshotMsg{index: index, snap: source.fetch(fresh)} }
 }
 
 func tick() tea.Cmd {
@@ -82,21 +114,23 @@ func tick() tea.Cmd {
 }
 
 func (m model) Init() tea.Cmd {
-	return tea.Batch(tick(), m.spinner.Tick, claudeCmd(false), codexCmd())
+	cmds := []tea.Cmd{tick(), m.spinner.Tick}
+	for i, source := range m.sources {
+		cmds = append(cmds, sourceCmd(i, source, false))
+	}
+	return tea.Batch(cmds...)
 }
 
-// refresh starts both fetches. Already-running fetches are left alone so a held
-// key cannot pile up scans.
+// refresh starts every source's fetch. Already-running fetches are left alone
+// so a held key cannot pile up scans.
 func (m *model) refresh(fresh bool) tea.Cmd {
 	var cmds []tea.Cmd
 	spinning := m.busy() // a second Tick chain would double the spinner's speed
-	if !m.loadingClaude {
-		m.loadingClaude = true
-		cmds = append(cmds, claudeCmd(fresh))
-	}
-	if !m.loadingCodex {
-		m.loadingCodex = true
-		cmds = append(cmds, codexCmd())
+	for i, source := range m.sources {
+		if !source.loading {
+			m.sources[i].loading = true
+			cmds = append(cmds, sourceCmd(i, source, fresh))
+		}
 	}
 	if !spinning && m.busy() {
 		cmds = append(cmds, m.spinner.Tick)
@@ -128,13 +162,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.now = time.Time(msg)
 		var cmds []tea.Cmd
 		spinning := m.busy() // an idle spinner must not be started twice
-		if !m.loadingClaude && !m.now.Before(m.claudeDue) {
-			m.loadingClaude = true
-			cmds = append(cmds, claudeCmd(false))
-		}
-		if !m.loadingCodex && !m.now.Before(m.codexDue) {
-			m.loadingCodex = true
-			cmds = append(cmds, codexCmd())
+		for i, source := range m.sources {
+			if !source.loading && !m.now.Before(source.due) {
+				m.sources[i].loading = true
+				cmds = append(cmds, sourceCmd(i, source, false))
+			}
 		}
 		if !spinning && m.busy() {
 			cmds = append(cmds, m.spinner.Tick)
@@ -142,14 +174,13 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(append(cmds, tick())...)
 
 	case snapshotMsg:
+		if msg.index < 0 || msg.index >= len(m.sources) {
+			return m, nil
+		}
 		snap := msg.snap
 		m.record(&snap)
-		due := time.Now().Add(m.interval)
-		if snap.Source == "claude" {
-			m.claude, m.loadingClaude, m.claudeDue = &snap, false, due
-		} else {
-			m.codex, m.loadingCodex, m.codexDue = &snap, false, due
-		}
+		source := &m.sources[msg.index]
+		source.snap, source.loading, source.due = &snap, false, time.Now().Add(m.interval)
 		return m, nil
 
 	case spinner.TickMsg:
@@ -254,26 +285,27 @@ func main() {
 	}
 }
 
-// renderJSON fetches the two independent sources concurrently so status-line
-// callers do not wait for one source before reading the other.
+// renderJSON fetches every source from the same list the TUI uses, and
+// concurrently, so status-line callers do not wait for one source before
+// reading the other.
 func renderJSON(history *History, fresh, recordHistory bool) int {
-	var claude, codex Snapshot
+	sources := defaultSources()
+	snaps := make([]Snapshot, len(sources))
 	var wait sync.WaitGroup
-	wait.Add(2)
-	go func() {
-		defer wait.Done()
-		claude = fetchClaude(fresh)
-	}()
-	go func() {
-		defer wait.Done()
-		codex = fetchCodex()
-	}()
+	wait.Add(len(sources))
+	for i, source := range sources {
+		i, source := i, source
+		go func() {
+			defer wait.Done()
+			snaps[i] = source.fetch(fresh)
+		}()
+	}
 	wait.Wait()
-	recordJSONSnapshots(history, []Snapshot{claude, codex}, recordHistory)
+	recordJSONSnapshots(history, snaps, recordHistory)
 
 	encoder := json.NewEncoder(os.Stdout)
 	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(encodeJSON([]Snapshot{claude, codex}, history, time.Now())); err != nil {
+	if err := encoder.Encode(encodeJSON(snaps, history, time.Now())); err != nil {
 		fmt.Fprintln(os.Stderr, "quotatop:", err)
 		return 1
 	}
@@ -308,15 +340,18 @@ func renderSnapshot(m model, width int, fresh bool) int {
 	m.width = width
 	m.now = time.Now()
 
-	claude := fetchClaude(fresh)
-	codex := fetchCodex()
-	m.record(&claude)
-	m.record(&codex)
-	m.claude, m.codex = &claude, &codex
-	m.loadingClaude, m.loadingCodex = false, false
+	failed := false
+	for i := range m.sources {
+		snap := m.sources[i].fetch(fresh)
+		m.record(&snap)
+		m.sources[i].snap, m.sources[i].loading = &snap, false
+		if snap.Err != nil {
+			failed = true
+		}
+	}
 
 	fmt.Println(strings.TrimRight(m.View(), "\n"))
-	if claude.Err != nil || codex.Err != nil {
+	if failed {
 		return 1
 	}
 	return 0

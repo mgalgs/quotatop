@@ -132,9 +132,9 @@ func TestTightestIgnoresExpiredWindows(t *testing.T) {
 	now := time.Now()
 	m := newModel(20*time.Second, loadHistory(""))
 	m.now = now
-	m.claude = &Snapshot{Source: "claude", Title: "CLAUDE", Observed: now,
+	m.sources[0].snap = &Snapshot{Source: "claude", Title: "CLAUDE", Observed: now,
 		Windows: []Window{{Key: "session", Label: "5-hour", Percent: 97, Expired: true}}}
-	m.codex = &Snapshot{Source: "codex", Title: "CODEX", Observed: now,
+	m.sources[1].snap = &Snapshot{Source: "codex", Title: "CODEX", Observed: now,
 		Windows: []Window{{Key: "primary", Label: "5-hour", Percent: 10}}}
 	name, worst, found := m.tightest()
 	if !found || worst != 10 || name != "CODEX 5-hour" {
@@ -165,8 +165,8 @@ func TestViewFitsTerminalWidth(t *testing.T) {
 		for _, help := range []bool{false, true} {
 			m := newModel(20*time.Second, loadHistory(""))
 			m.width, m.now, m.showHelp = width, now, help
-			m.claude = demoSnapshot(now)
-			m.codex = &Snapshot{Source: "codex", Title: "CODEX", Chip: "team", Verb: "reported",
+			m.sources[0].snap = demoSnapshot(now)
+			m.sources[1].snap = &Snapshot{Source: "codex", Title: "CODEX", Chip: "team", Verb: "reported",
 				Observed: now, Windows: []Window{{Key: "primary", Label: "5-hour", Percent: 13}}}
 			for i, line := range strings.Split(m.View(), "\n") {
 				if got := lipgloss.Width(line); got > width {
@@ -174,6 +174,177 @@ func TestViewFitsTerminalWidth(t *testing.T) {
 						width, help, i, got-width, line)
 				}
 			}
+		}
+	}
+}
+
+func TestGridColumnsAndRowWidthsMatchOldTwoPanelLadder(t *testing.T) {
+	for _, width := range []int{94, 132} {
+		if cols := gridColumns(width, 2); cols != 2 {
+			t.Errorf("gridColumns(%d, 2) = %d, want 2", width, cols)
+		}
+		half := (width - panelGap) / 2
+		other := width - panelGap - half
+		widths := rowWidths(width, 2)
+		if len(widths) != 2 || widths[0] != half || widths[1] != other {
+			t.Errorf("rowWidths(%d, 2) = %v, want [%d %d]", width, widths, half, other)
+		}
+	}
+
+	width := 60
+	if cols := gridColumns(width, 2); cols != 1 {
+		t.Errorf("gridColumns(%d, 2) = %d, want 1", width, cols)
+	}
+	widths := rowWidths(width, 1)
+	if len(widths) != 1 || widths[0] != width {
+		t.Errorf("rowWidths(%d, 1) = %v, want [%d]", width, widths, width)
+	}
+}
+
+// gridSources builds n sourceStates with distinct fixed snapshots, for tests
+// that need View() itself to render a specific panel count.
+func gridSources(now time.Time, n int) []sourceState {
+	sources := make([]sourceState, n)
+	for i := range sources {
+		sources[i] = sourceState{snap: &Snapshot{
+			Source: "claude", Title: fmt.Sprintf("S%d", i), Observed: now,
+			Windows: []Window{{Key: "session", Label: "5-hour", Percent: 10}},
+		}}
+	}
+	return sources
+}
+
+// topBorderCounts renders m and returns, for every line that opens a panel
+// row (contains the box's top-left corner), how many panels start on that
+// line -- i.e. the row's panel count, in row order.
+func topBorderCounts(view string) []int {
+	var counts []int
+	for _, line := range strings.Split(view, "\n") {
+		if n := strings.Count(line, "╭"); n > 0 {
+			counts = append(counts, n)
+		}
+	}
+	return counts
+}
+
+// This exercises View() itself, not a copy of its chunking loop: a
+// regression in the loop at view.go (e.g. one panel per row) would change
+// what actually gets rendered, and only a test that calls View() can catch
+// that.
+func TestViewRendersThreePanelsAsTwoRows(t *testing.T) {
+	now := time.Now()
+	m := newModel(20*time.Second, loadHistory(""))
+	m.width, m.now = 132, now
+	m.sources = gridSources(now, 3)
+
+	got := topBorderCounts(m.View())
+	if want := []int{2, 1}; len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("row panel counts = %v, want %v", got, want)
+	}
+}
+
+func TestViewRendersFivePanelsAsTwoTwoOne(t *testing.T) {
+	now := time.Now()
+	m := newModel(20*time.Second, loadHistory(""))
+	m.width, m.now = 132, now
+	m.sources = gridSources(now, 5)
+
+	got := topBorderCounts(m.View())
+	want := []int{2, 2, 1}
+	if len(got) != len(want) {
+		t.Fatalf("row panel counts = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("row %d has %d panels, want %d (all rows=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+// visualColumn returns the on-screen column at which substr starts in line,
+// accounting for ANSI escapes (which contribute no width) ahead of it.
+func visualColumn(t *testing.T, line, substr string) int {
+	t.Helper()
+	idx := strings.Index(line, substr)
+	if idx < 0 {
+		t.Fatalf("substring %q not found in %q", substr, line)
+	}
+	return lipgloss.Width(line[:idx])
+}
+
+// A trailing row narrower than a full row must still start its panel under
+// the same column as the row above it, and that panel must keep a full row's
+// column width rather than stretching to fill the terminal. This only shows
+// up once the terminal is wider than maxLayout, which is where View() hands
+// a ragged-width block to lipgloss.PlaceHorizontal -- a helper that recentres
+// each line independently, so a short line drifts away from the column it
+// belongs under unless every line was padded to the same width first.
+func TestViewTrailingRowStaysUnderFullRowColumn(t *testing.T) {
+	now := time.Now()
+	m := newModel(20*time.Second, loadHistory(""))
+	m.width, m.now = 180, now
+	m.sources = gridSources(now, 3)
+
+	cols := gridColumns(maxLayout, 3)
+	colWidths := rowWidths(maxLayout, cols)
+
+	var topBorders []string
+	for _, line := range strings.Split(m.View(), "\n") {
+		if strings.Contains(line, "╭") {
+			topBorders = append(topBorders, line)
+		}
+	}
+	if len(topBorders) != 2 {
+		t.Fatalf("got %d top-border lines, want 2 (a full row and a trailing row)", len(topBorders))
+	}
+	fullRow, trailingRow := topBorders[0], topBorders[1]
+
+	fullStart := visualColumn(t, fullRow, "╭")
+	trailingStart := visualColumn(t, trailingRow, "╭")
+	if trailingStart != fullStart {
+		t.Errorf("trailing row panel starts at column %d, full row's first panel at %d; want them aligned",
+			trailingStart, fullStart)
+	}
+
+	startByte := strings.Index(trailingRow, "╭")
+	endByte := strings.Index(trailingRow, "╮") + len("╮")
+	trailingWidth := lipgloss.Width(trailingRow[startByte:endByte])
+	if trailingWidth != colWidths[0] {
+		t.Errorf("trailing row panel width = %d, want %d (a full row's column width, not stretched)",
+			trailingWidth, colWidths[0])
+	}
+}
+
+// The help panel's codex source line must list every codex source, not stop
+// after the first: a model can carry more than one, and going silent about
+// the rest is a silently wrong help line rather than a missing one.
+func TestHelpBodyListsEveryCodexSourceDetail(t *testing.T) {
+	now := time.Now()
+	m := newModel(20*time.Second, loadHistory(""))
+	m.now, m.showHelp = now, true
+	m.sources = []sourceState{
+		{snap: &Snapshot{Source: "codex", Title: "CODEX 1", Detail: "/first/session.jsonl"}},
+		{snap: &Snapshot{Source: "codex", Title: "CODEX 2", Detail: "/second/session.jsonl"}},
+	}
+	body := m.helpBody(100)
+	if !strings.Contains(body, "/first/session.jsonl") {
+		t.Errorf("help body missing the first codex source's detail:\n%s", body)
+	}
+	if !strings.Contains(body, "/second/session.jsonl") {
+		t.Errorf("help body missing the second codex source's detail:\n%s", body)
+	}
+}
+
+func TestRowWidthsSumToFullWidthIncludingGaps(t *testing.T) {
+	width := 132
+	for _, k := range []int{1, 2, 3} {
+		widths := rowWidths(width, k)
+		sum := 0
+		for _, w := range widths {
+			sum += w
+		}
+		if got := sum + (k-1)*panelGap; got != width {
+			t.Errorf("k=%d: widths %v sum to %d plus gaps = %d, want %d", k, widths, sum, got, width)
 		}
 	}
 }
