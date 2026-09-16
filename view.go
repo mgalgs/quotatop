@@ -144,9 +144,12 @@ func projectionText(projection Projection, resetsAt time.Time, windowLength time
 	if !projection.FullAt.IsZero() && !resetsAt.IsZero() && resetsAt.After(now) {
 		if diff := projection.FullAt.Sub(resetsAt); diff.Abs() >= time.Minute {
 			// A gap bigger than a whole window means several more windows
-			// would have to pass before the pace ran dry or came in with
-			// room to spare -- not a useful reading, and the headline
-			// (full-in or at-reset) already carries the number that matters.
+			// would have to pass before the pace came in with room to
+			// spare -- not a useful reading, and the headline (full-in or
+			// at-reset) already carries the number that matters. In
+			// practice this only ever suppresses spare: a short gap is
+			// bounded by how much of the window remains, so it never
+			// exceeds windowLength.
 			if windowLength <= 0 || diff.Abs() <= windowLength {
 				if diff < 0 {
 					gap = " (" + compactDuration(-diff) + " short)"

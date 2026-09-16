@@ -646,7 +646,9 @@ func TestProjectSustainedWithoutExhaustion(t *testing.T) {
 // The headline fix: a window that sat idle before use began must be measured
 // from when use began, not from when the window opened, or the rate is
 // diluted by the idle stretch and a real warning can hide behind a calm
-// number.
+// number. The bar had already accrued 3% by the time activity was dated, so
+// that much is charged to the idle stretch before the anchor, not to the
+// post-anchor slope: the rate is (12-3)/24, not 12/24.
 func TestProjectSustainedMeasuresFromFirstActivity(t *testing.T) {
 	now := time.Now()
 	window := Window{Key: "weekly_all", Percent: 12, Length: 168 * time.Hour,
@@ -663,8 +665,8 @@ func TestProjectSustainedMeasuresFromFirstActivity(t *testing.T) {
 	if !projection.Valid || !projection.Sustained {
 		t.Fatalf("expected a sustained projection: %+v", projection)
 	}
-	if projection.RatePerHour < 0.45 || projection.RatePerHour > 0.55 {
-		t.Errorf("rate = %v%%/h, want ~0.5 (12/24 from first activity, not 12/96 from window open)",
+	if projection.RatePerHour < 0.35 || projection.RatePerHour > 0.4 {
+		t.Errorf("rate = %v%%/h, want ~0.375 ((12-3)/24 since first activity, not 12/96 from window open)",
 			projection.RatePerHour)
 	}
 }
@@ -721,9 +723,13 @@ func TestProjectSustainedIgnoresZeroSampleFromPreviousWindow(t *testing.T) {
 	}
 }
 
-// First activity under the 12h floor falls back to the live slope, the same
-// as any other window the sustained model cannot yet date confidently.
-func TestProjectSustainedTooLittleActivityFallsBackToLiveModel(t *testing.T) {
+// First activity under the 12h floor does not disqualify the sustained model
+// by itself: the window has been open 38h, long enough on its own to smooth
+// over the same nights and weekends the model exists for, so it falls back
+// to measuring from the window's own open (pct 0) instead of abandoning the
+// model for the volatile live slope. Only a window that is itself still
+// young (TestProjectSustainedFallsBackEarlyInWindow) falls through.
+func TestProjectSustainedFallsBackToWindowOpenWhenActivityTooRecent(t *testing.T) {
 	now := time.Now()
 	window := Window{Key: "weekly_all", Percent: 8, Length: 168 * time.Hour,
 		ResetsAt: now.Add(130 * time.Hour)} // 38h elapsed since the window opened
@@ -731,14 +737,12 @@ func TestProjectSustainedTooLittleActivityFallsBackToLiveModel(t *testing.T) {
 	history.Add("claude/weekly_all", now.Add(-8*time.Hour), 0) // first activity only 8h ago
 	history.Add("claude/weekly_all", now.Add(-time.Hour), 4)
 	projection := history.Project("claude", window, now)
-	if projection.Sustained {
-		t.Fatal("first activity 8h ago should not qualify for the sustained model")
+	if !projection.Valid || !projection.Sustained {
+		t.Fatalf("expected a sustained projection: %+v", projection)
 	}
-	if !projection.Valid {
-		t.Fatalf("expected the live model to still project: %+v", projection)
-	}
-	if projection.RatePerHour < 0.9 || projection.RatePerHour > 1.1 {
-		t.Errorf("rate = %v%%/h, want ~1.0 from the recent slope", projection.RatePerHour)
+	if projection.RatePerHour < 0.19 || projection.RatePerHour > 0.22 {
+		t.Errorf("rate = %v%%/h, want ~0.21 (8/38 from window open, not the recent slope)",
+			projection.RatePerHour)
 	}
 }
 

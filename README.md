@@ -157,15 +157,18 @@ what makes the sparkline and the burn rate work on the first frame after a
 restart instead of an hour later.
 
 The rate comes from one of two models. Long windows (24h or more) are projected
-from their own elapsed pace — the current percentage divided by the hours since
-activity began (the first sample after history last saw the window at zero,
-falling back to when the window opened if history does not reach that far
-back) — because a weekly window's elapsed time already contains the nights and
-days away from the keyboard, and extrapolating a working-hours slope across
-mostly-sleep time overstates the burn; these are labelled `avg`. Shorter
-windows keep the live slope, fitted over the samples since the window last
-reset — a reset is a sharp drop, and averaging across one would report a
-meaningless negative burn.
+from their own elapsed pace — the percentage accrued since an anchor, divided
+by the hours since that anchor — because a weekly window's elapsed time
+already contains the nights and days away from the keyboard, and extrapolating
+a working-hours slope across mostly-sleep time overstates the burn; these are
+labelled `avg`. The anchor is the first sample after history last saw the
+window at zero, so the days before it don't get charged against the
+post-anchor slope; it falls back to the window's own open (zero, by
+definition) when history does not reach back that far, and also when the
+window has been open 12h or more but that first sample is too recent to trust
+on its own. Shorter windows keep the live slope, fitted over the samples since
+the window last reset — a reset is a sharp drop, and averaging across one
+would report a meaningless negative burn.
 
 Either way the result is `→ ~38% at reset`, or a red `→ full in 1d 7h` when the
 window will not survive the pace. Where there is a reset deadline to measure
@@ -180,9 +183,11 @@ against, the forecast also carries the gap between the two:
 survivable one; both are computed from the same crossing time as the headline
 and cannot disagree with it. The parenthetical is dropped when the gap is
 bigger than the window's own length — several more windows would have to pass
-before the pace ran dry or came in with room to spare, which is not a useful
-reading, so on a weekly window a `→ ~11% at reset` with no `spare` alongside it
-just means the gap was that large.
+before the pace came in with room to spare, which is not a useful reading.
+In practice this only ever suppresses `spare`: a `short` gap is bounded by how
+much of the window remains, which is always within one window length, so it
+always shows. On a weekly window a `→ ~11% at reset` with no `spare` alongside
+it just means the gap was that large.
 
 Rates are a prompt to look, not a forecast.
 
