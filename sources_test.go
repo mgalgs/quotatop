@@ -618,6 +618,130 @@ func TestCodexHalfWrittenFinalLineIsSkippedAcrossRoots(t *testing.T) {
 	}
 }
 
+// codexBlockedLine builds a token_count row shaped like a real blocked
+// signal: limit_id "premium", both windows null, and a
+// rate_limit_reached_type. This is the exact shape an archived log carries
+// (both windows null is why the limit_id filter must reject the row for
+// percentage purposes while still yielding the reached type).
+func codexBlockedLine(ts, reachedType string) string {
+	return fmt.Sprintf(`{"timestamp":"%s","type":"event_msg","payload":{"type":"token_count","rate_limits":{`+
+		`"limit_id":"premium","primary":null,"secondary":null,"plan_type":"team",`+
+		`"rate_limit_reached_type":"%s"}}}`, ts, reachedType)
+}
+
+// The newest row being a blocked "premium" row with null windows must not
+// blank the percentages: they still come from the newest usable "codex" row,
+// while the block itself is surfaced separately.
+func TestCodexBlockedRowSetsLimitReachedWithoutLosingPercentages(t *testing.T) {
+	dir := t.TempDir()
+	writeSessionFile(t, dir, "a.jsonl",
+		codexLine("2026-03-01T10:00:00Z", `"codex"`, `plus`, `{"used_percent":42,"window_minutes":300}`, ``)+"\n"+
+			codexBlockedLine("2026-03-01T11:00:00Z", "workspace_member_usage_limit_reached")+"\n")
+	snap := codexSource{defaultRoot: dir}.fetch()
+	if snap.Err != nil {
+		t.Fatalf("fetch failed: %v", snap.Err)
+	}
+	if len(snap.Windows) != 1 || snap.Windows[0].Percent != 42 {
+		t.Errorf("windows = %+v, want the earlier codex row's percentage", snap.Windows)
+	}
+	if snap.LimitReached != "workspace_member_usage_limit_reached" {
+		t.Errorf("LimitReached = %q, want the reached type from the newer blocked row", snap.LimitReached)
+	}
+}
+
+// TRAP regression: a blocked row followed by a *newer* normal codex row means
+// the block is over. codexReport.consider wholesale-replaces the struct when
+// a newer row wins, so reachedType/reachedAt must be explicitly carried
+// across that replacement (the same way scanErr is) or this would pass by
+// accident even with the carry-across code deleted.
+func TestCodexNewerNormalRowDropsOlderBlock(t *testing.T) {
+	dir := t.TempDir()
+	writeSessionFile(t, dir, "a.jsonl",
+		codexBlockedLine("2026-03-01T10:00:00Z", "workspace_member_usage_limit_reached")+"\n"+
+			codexLine("2026-03-01T11:00:00Z", `"codex"`, `plus`, `{"used_percent":77,"window_minutes":300}`, ``)+"\n")
+	snap := codexSource{defaultRoot: dir}.fetch()
+	if snap.Err != nil {
+		t.Fatalf("fetch failed: %v", snap.Err)
+	}
+	if snap.LimitReached != "" {
+		t.Errorf("LimitReached = %q, want empty: the block is older than the reading", snap.LimitReached)
+	}
+	if len(snap.Windows) != 1 || snap.Windows[0].Percent != 77 {
+		t.Errorf("windows = %+v, want the newer row's percentage", snap.Windows)
+	}
+}
+
+// A blocked row newer than the newest normal row must be reported, even when
+// it is not literally the last line scanned (the extra root's row makes this
+// distinct from the "newest row is blocked" case above).
+func TestCodexBlockedRowNewerThanNormalRowAcrossRoots(t *testing.T) {
+	def := t.TempDir()
+	extra := t.TempDir()
+	writeSessionFile(t, def, "a.jsonl",
+		codexLine("2026-03-01T10:00:00Z", `"codex"`, `plus`, `{"used_percent":20,"window_minutes":300}`, ``)+"\n")
+	writeSessionFile(t, extra, "b.jsonl",
+		codexBlockedLine("2026-03-01T12:00:00Z", "workspace_member_usage_limit_reached")+"\n")
+	snap := codexSource{defaultRoot: def, extraRoots: []string{extra}}.fetch()
+	if snap.Err != nil {
+		t.Fatalf("fetch failed: %v", snap.Err)
+	}
+	if snap.LimitReached != "workspace_member_usage_limit_reached" {
+		t.Errorf("LimitReached = %q, want the block from the extra root's newer row", snap.LimitReached)
+	}
+	if len(snap.Windows) != 1 || snap.Windows[0].Percent != 20 {
+		t.Errorf("windows = %+v, want the default root's percentage", snap.Windows)
+	}
+}
+
+// windowExpired is the single expression of the expiry rule; exercise its
+// boundary directly rather than through file I/O and the real clock.
+func TestWindowExpiredBoundary(t *testing.T) {
+	now := time.Date(2026, 3, 1, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name     string
+		length   time.Duration
+		observed time.Time
+		want     bool
+	}{
+		{"age equals length is expired", 5 * time.Hour, now.Add(-5 * time.Hour), true},
+		{"one second short of length is not expired", 5 * time.Hour, now.Add(-5*time.Hour + time.Second), false},
+		{"zero length is never expired", 0, now.Add(-1000 * time.Hour), false},
+		{"well within the window is not expired", 5 * time.Hour, now.Add(-time.Hour), false},
+		{"well past the window is expired", 5 * time.Hour, now.Add(-6 * time.Hour), true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := windowExpired(tc.length, tc.observed, now); got != tc.want {
+				t.Errorf("windowExpired(%v, %v, %v) = %v, want %v", tc.length, tc.observed, now, got, tc.want)
+			}
+		})
+	}
+}
+
+// Expiry is a per-window property: a 10-hour-old reading expires the 5-hour
+// window but leaves the weekly window, from the very same reading, valid.
+func TestCodexPerWindowExpiry(t *testing.T) {
+	dir := t.TempDir()
+	ts := time.Now().Add(-10 * time.Hour).UTC().Format(time.RFC3339)
+	writeSessionFile(t, dir, "a.jsonl",
+		codexLine(ts, `"codex"`, `plus`,
+			`{"used_percent":42,"window_minutes":300}`, `{"used_percent":11,"window_minutes":10080}`)+"\n")
+	snap := codexSource{defaultRoot: dir}.fetch()
+	if snap.Err != nil {
+		t.Fatalf("fetch failed: %v", snap.Err)
+	}
+	got := map[string]Window{}
+	for _, window := range snap.Windows {
+		got[window.Key] = window
+	}
+	if primary := got["primary"]; !primary.Expired {
+		t.Errorf("primary (5h) window = %+v, want Expired", primary)
+	}
+	if secondary := got["secondary"]; secondary.Expired {
+		t.Errorf("secondary (weekly) window = %+v, want not Expired", secondary)
+	}
+}
+
 // --- Config ---------------------------------------------------------------
 
 func writeConfigFile(t *testing.T, content string) string {
