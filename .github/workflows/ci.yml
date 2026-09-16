@@ -39,3 +39,22 @@ jobs:
 
       - name: test
         run: go test ./...
+
+      # The locking code is split by platform, and ubuntu-latest compiles only
+      # history_lock_unix.go -- so without this step the windows and aix files
+      # are never built by anything. darwin is here because the README invites
+      # a macOS credentials PR, and a contributor should find the tree already
+      # compiling for their platform. Build only: the runner cannot execute
+      # these binaries.
+      - name: cross-compile
+        run: |
+          for target in windows/amd64 aix/ppc64 darwin/arm64; do
+            echo "building $target"
+            GOOS="${target%/*}" GOARCH="${target#*/}" go build ./...
+          done
+
+      # Separate from the plain test step, not folded into it: -race needs cgo
+      # and a C toolchain, so keeping both means a broken toolchain still
+      # leaves the ordinary suite as signal.
+      - name: test (race)
+        run: go test -race ./...
