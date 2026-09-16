@@ -167,13 +167,21 @@ The document is versioned (`"schema": 1`) and stable. Two rules for consumers:
 - **`projection` is always an object, never null.** Check `valid` before
   reading the rest of it.
 
-A window's `expired` (bool, omitted when false) means the reading is older
-than the window it describes — the window has certainly reset since this
-percentage was observed. `percent` and `projection` still carry the last
-known numbers for reference, but they describe a window that is gone;
-`projection.valid` is always `false` when `expired` is `true`. A consumer
-that cares about the *current* state should skip a window's `percent` when
-`expired` is set rather than treat it as live.
+A window's `expired` (bool, omitted when false) means the window has certainly
+reset since this percentage was observed — either the reading outlived the
+window's own length, or the window's reported reset time has already passed.
+`percent` still carries the last known number for reference, but it describes
+a window that is gone; `projection.valid` is always `false` when `expired` is
+`true`, since a forecast derived from a discarded reading is worse than no
+forecast. A consumer that cares about the *current* state should skip a
+window's `percent` when `expired` is set rather than treat it as live.
+
+This matters most for Codex, which has no server to poll: a reading is only as
+fresh as the newest session log that recorded one, so five idle hours are
+enough to make the 5-hour window's number describe a window that no longer
+exists. It is per-window, not per-source — one observation time is shared by
+every window of a source, but they have different lengths, so a ten-hour-old
+Codex reading expires the 5-hour window while the weekly one stays valid.
 
 A source's `limit_reached` (string, omitted when empty) carries the reason
 the account is refusing work — for example
