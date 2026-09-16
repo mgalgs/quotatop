@@ -1110,6 +1110,21 @@ func TestClaudeCredentialsOverride(t *testing.T) {
 	}
 }
 
+// The empty account (today's only account) must keep the exact cache
+// filename quotatop has always used: a future non-empty account gets a
+// filename of its own, but this round adds no way to set one, so the
+// default must be pinned unchanged.
+func TestClaudeDefaultCachePathIsUnchangedForEmptyAccount(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setConfigValues(t, nil)
+	got := defaultClaudeSource().cachePath
+	want := filepath.Join(home, ".cache", "quotatop", "claude-quota.json")
+	if got != want {
+		t.Errorf("cachePath = %q, want the unchanged default %q", got, want)
+	}
+}
+
 // The config file's QUOTATOP_HISTORY reaches the history path, with the
 // leading ~/ expanded by the loader.
 func TestConfigFileSuppliesHistoryPath(t *testing.T) {
