@@ -285,36 +285,48 @@ const (
 	sustainedMinElapsed = 12 * time.Hour // under this the denominator is too small
 )
 
-// sustainedRate is the burn rate measured over the window's own elapsed time,
-// current_percent / hours since the window opened. It exists because a weekly
-// window's elapsed time already contains the nights, weekends and days away
-// from the keyboard that a recent slope does not: extrapolating a working-hours
-// rate across mostly-sleep time overstates the burn. It needs no history at all,
-// so it is correct on a machine with an empty history file.
+// sustainedRate is the burn rate measured over the window's own elapsed
+// activity, current_percent / hours since the window last read zero (or, if
+// history does not reach that far back, since the window opened). It exists
+// because a weekly window's elapsed time already contains the nights,
+// weekends and days away from the keyboard that a recent slope does not:
+// extrapolating a working-hours rate across mostly-sleep time overstates the
+// burn. Measuring from the window's own open would in turn understate the
+// burn when the window sat idle before use began, so this measures from the
+// most recent sample where the bar was still at zero instead. It needs no
+// history at all, so it is correct on a machine with an empty history file.
 //
 // It applies only to long windows (Length >= 24h) with a known reset deadline,
-// once at least 12h of the window have passed (the denominator is too small
-// before that and the projection explodes), and only while we are still inside
-// that window. It returns ok=false when any of that is missing, so the caller
-// falls back to the live slope.
-func sustainedRate(window Window, now time.Time) (float64, bool) {
+// once at least 12h of measured activity have passed (the denominator is too
+// small before that and the projection explodes), and only while we are still
+// inside that window. It returns ok=false when any of that is missing, so the
+// caller falls back to the live slope.
+func (h *History) sustainedRate(identity string, window Window, now time.Time) (float64, bool) {
 	if window.Length < sustainedMinLength {
 		return 0, false // short windows keep the live model
 	}
 	if window.ResetsAt.IsZero() {
 		return 0, false // without a reset time we cannot date the window's start
 	}
-	elapsed := now.Sub(window.ResetsAt.Add(-window.Length))
-	if elapsed < sustainedMinElapsed {
-		return 0, false // too early in the window
-	}
-	if elapsed >= window.Length {
+	windowStart := window.ResetsAt.Add(-window.Length)
+	windowElapsed := now.Sub(windowStart)
+	if windowElapsed >= window.Length {
 		return 0, false // not inside the window we think we are
 	}
 	if window.Percent <= 0 {
 		return 0, false // nothing to measure
 	}
-	return window.Percent / elapsed.Hours(), true
+	activityStart := windowStart
+	for _, s := range h.data[historyKey(identity, window.Key)] {
+		if !s.T.Before(windowStart) && s.Pct <= 0 {
+			activityStart = s.T // the most recent zero reading in this window
+		}
+	}
+	activityElapsed := now.Sub(activityStart)
+	if activityElapsed < sustainedMinElapsed {
+		return 0, false // too little measured activity; fall back to the live slope
+	}
+	return window.Percent / activityElapsed.Hours(), true
 }
 
 // finishProjection extends a rate out to the reset and, if the pace reaches
@@ -348,7 +360,7 @@ func finishProjection(current, rate float64, resetsAt, now time.Time) Projection
 // window reset is a sharp drop, and averaging across one would report a
 // meaningless negative burn, so everything before the last drop is discarded.
 func (h *History) Project(identity string, window Window, now time.Time) Projection {
-	if rate, ok := sustainedRate(window, now); ok {
+	if rate, ok := h.sustainedRate(identity, window, now); ok {
 		projection := finishProjection(window.Percent, rate, window.ResetsAt, now)
 		projection.Sustained = true
 		return projection

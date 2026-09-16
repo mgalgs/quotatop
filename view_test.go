@@ -643,6 +643,99 @@ func TestProjectSustainedWithoutExhaustion(t *testing.T) {
 	}
 }
 
+// The headline fix: a window that sat idle before use began must be measured
+// from when use began, not from when the window opened, or the rate is
+// diluted by the idle stretch and a real warning can hide behind a calm
+// number.
+func TestProjectSustainedMeasuresFromFirstActivity(t *testing.T) {
+	now := time.Now()
+	window := Window{Key: "weekly_all", Percent: 12, Length: 168 * time.Hour,
+		ResetsAt: now.Add(72 * time.Hour)} // 96h elapsed since the window opened
+	history := loadHistory("")
+	history.Add("claude/weekly_all", now.Add(-24*time.Hour), 0) // bar still read zero 24h ago
+	projection := history.Project("claude", window, now)
+	if !projection.Valid || !projection.Sustained {
+		t.Fatalf("expected a sustained projection: %+v", projection)
+	}
+	if projection.RatePerHour < 0.45 || projection.RatePerHour > 0.55 {
+		t.Errorf("rate = %v%%/h, want ~0.5 (12/24 from first activity, not 12/96 from window open)",
+			projection.RatePerHour)
+	}
+}
+
+// The promise this fix must keep: a machine with no history at all reproduces
+// today's number exactly, because there is nothing to measure activity from.
+func TestProjectSustainedEmptyHistoryFallsBackToWindowOpen(t *testing.T) {
+	now := time.Now()
+	window := Window{Key: "weekly_all", Percent: 41, Length: 168 * time.Hour,
+		ResetsAt: now.Add(127 * time.Hour)} // 41h elapsed since the window opened
+	projection := loadHistory("").Project("claude", window, now)
+	if !projection.Valid || !projection.Sustained {
+		t.Fatalf("expected a sustained projection: %+v", projection)
+	}
+	if projection.RatePerHour < 0.9 || projection.RatePerHour > 1.1 {
+		t.Errorf("rate = %v%%/h, want ~1.0 from window open (no history to measure activity from)",
+			projection.RatePerHour)
+	}
+}
+
+// History that exists but never reaches a zero reading inside this window
+// (it starts mid-use, or was trimmed) cannot date first activity either, so
+// it falls back the same way empty history does.
+func TestProjectSustainedNoZeroSampleFallsBackToWindowOpen(t *testing.T) {
+	now := time.Now()
+	window := Window{Key: "weekly_all", Percent: 20, Length: 168 * time.Hour,
+		ResetsAt: now.Add(68 * time.Hour)} // 100h elapsed since the window opened
+	history := loadHistory("")
+	history.Add("claude/weekly_all", now.Add(-90*time.Hour), 5) // never reads zero
+	projection := history.Project("claude", window, now)
+	if !projection.Valid || !projection.Sustained {
+		t.Fatalf("expected a sustained projection: %+v", projection)
+	}
+	if projection.RatePerHour < 0.19 || projection.RatePerHour > 0.21 {
+		t.Errorf("rate = %v%%/h, want ~0.2 (20/100, measured from window open)", projection.RatePerHour)
+	}
+}
+
+// A zero reading that belongs to the *previous* window must not be mistaken
+// for this window's first activity.
+func TestProjectSustainedIgnoresZeroSampleFromPreviousWindow(t *testing.T) {
+	now := time.Now()
+	window := Window{Key: "weekly_all", Percent: 25, Length: 168 * time.Hour,
+		ResetsAt: now.Add(118 * time.Hour)} // 50h elapsed since the window opened
+	history := loadHistory("")
+	history.Add("claude/weekly_all", now.Add(-60*time.Hour), 0) // the previous window's zero sample
+	projection := history.Project("claude", window, now)
+	if !projection.Valid || !projection.Sustained {
+		t.Fatalf("expected a sustained projection: %+v", projection)
+	}
+	if projection.RatePerHour < 0.45 || projection.RatePerHour > 0.55 {
+		t.Errorf("rate = %v%%/h, want ~0.5 (25/50, the earlier window's zero must not count)",
+			projection.RatePerHour)
+	}
+}
+
+// First activity under the 12h floor falls back to the live slope, the same
+// as any other window the sustained model cannot yet date confidently.
+func TestProjectSustainedTooLittleActivityFallsBackToLiveModel(t *testing.T) {
+	now := time.Now()
+	window := Window{Key: "weekly_all", Percent: 8, Length: 168 * time.Hour,
+		ResetsAt: now.Add(130 * time.Hour)} // 38h elapsed since the window opened
+	history := loadHistory("")
+	history.Add("claude/weekly_all", now.Add(-8*time.Hour), 0) // first activity only 8h ago
+	history.Add("claude/weekly_all", now.Add(-time.Hour), 4)
+	projection := history.Project("claude", window, now)
+	if projection.Sustained {
+		t.Fatal("first activity 8h ago should not qualify for the sustained model")
+	}
+	if !projection.Valid {
+		t.Fatalf("expected the live model to still project: %+v", projection)
+	}
+	if projection.RatePerHour < 0.9 || projection.RatePerHour > 1.1 {
+		t.Errorf("rate = %v%%/h, want ~1.0 from the recent slope", projection.RatePerHour)
+	}
+}
+
 func TestProjectionTextLabelsSustainedRate(t *testing.T) {
 	now := time.Now()
 	sustained := Projection{RatePerHour: 1.0, AtReset: 168, ExhaustAt: now.Add(59 * time.Hour),
