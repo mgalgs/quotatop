@@ -23,21 +23,34 @@ type Window struct {
 	ResetsAt time.Time
 	Length   time.Duration // how long the window lasts, for the sustained burn model
 	Note     string        // shown under the bar when something needs saying
+	Expired  bool          // the reading is older than the window it describes
+}
+
+// windowExpired reports whether a window's own length means the reading no
+// longer describes the live window: the observation is old enough that the
+// window has reset since it was taken. A window with no known length is
+// never expired.
+func windowExpired(length time.Duration, observed, now time.Time) bool {
+	if length <= 0 {
+		return false
+	}
+	return now.Sub(observed) >= length
 }
 
 // Snapshot is everything one source knows right now.
 type Snapshot struct {
-	Source   string // "claude" or "codex"
-	Title    string
-	Chip     string // plan or similar, shown in the panel's top-right
-	Windows  []Window
-	Observed time.Time // when the data itself was observed, not when we asked
-	Verb     string    // "fetched" / "reported"
-	Footnote string
-	Detail   string
-	Warning  string // panel-level caution, shown once under the windows
-	Err      error
-	At       time.Time // when this snapshot was produced
+	Source       string // "claude" or "codex"
+	Title        string
+	Chip         string // plan or similar, shown in the panel's top-right
+	Windows      []Window
+	Observed     time.Time // when the data itself was observed, not when we asked
+	Verb         string    // "fetched" / "reported"
+	Footnote     string
+	Detail       string
+	Warning      string // panel-level caution, shown once under the windows
+	LimitReached string // reason the account is refusing work, "" when not blocked
+	Err          error
+	At           time.Time // when this snapshot was produced
 }
 
 // --- Claude ---------------------------------------------------------------
@@ -296,9 +309,11 @@ func (s claudeSource) withPayload(snap Snapshot, payload claudePayload) Snapshot
 				label += " · " + *limit.Scope.Surface
 			}
 		}
+		length := claudeWindowLengths[limit.Kind]
 		snap.Windows = append(snap.Windows, Window{
 			Key: limit.Kind, Label: label, Percent: *limit.Percent,
-			ResetsAt: parseISO(limit.ResetsAt), Length: claudeWindowLengths[limit.Kind],
+			ResetsAt: parseISO(limit.ResetsAt), Length: length,
+			Expired: windowExpired(length, snap.Observed, snap.At),
 		})
 	}
 	// Older payloads carried only the two named buckets, with no limits[].
@@ -312,6 +327,7 @@ func (s claudeSource) withPayload(snap Snapshot, payload claudePayload) Snapshot
 			}
 			window := Window{Key: bucket.key, Label: bucket.label, Percent: *bucket.data.Utilization,
 				Length: claudeWindowLengths[bucket.key]}
+			window.Expired = windowExpired(window.Length, snap.Observed, snap.At)
 
 			if bucket.data.ResetsAt != nil {
 				window.ResetsAt = parseISO(*bucket.data.ResetsAt)
@@ -336,10 +352,11 @@ type codexRLWindow struct {
 }
 
 type codexRateLimits struct {
-	LimitID   *string        `json:"limit_id"`
-	PlanType  *string        `json:"plan_type"`
-	Primary   *codexRLWindow `json:"primary"`
-	Secondary *codexRLWindow `json:"secondary"`
+	LimitID              *string        `json:"limit_id"`
+	PlanType             *string        `json:"plan_type"`
+	Primary              *codexRLWindow `json:"primary"`
+	Secondary            *codexRLWindow `json:"secondary"`
+	RateLimitReachedType *string        `json:"rate_limit_reached_type"`
 }
 
 // codexRow is one line of a session log. Only token_count rows carrying rate
@@ -421,13 +438,15 @@ func fetchCodex() Snapshot { return defaultCodexSource().fetch() }
 
 // codexReport is the newest usage row seen so far and where it came from.
 type codexReport struct {
-	timestamp time.Time
-	path      string
-	root      string // "interactive" or "extra"; goes into the footnote
-	planType  string
-	primary   *codexRLWindow
-	secondary *codexRLWindow
-	scanErr   error // the first file with a genuine read error (I/O, permissions), if any
+	timestamp   time.Time
+	path        string
+	root        string // "interactive" or "extra"; goes into the footnote
+	planType    string
+	primary     *codexRLWindow
+	secondary   *codexRLWindow
+	scanErr     error     // the first file with a genuine read error (I/O, permissions), if any
+	reachedType string    // newest non-empty rate_limit_reached_type seen, "" if none
+	reachedAt   time.Time // timestamp of the row reachedType came from
 }
 
 // consider upgrades the running best when the row is a usage report and is at
@@ -439,6 +458,19 @@ func (r *codexReport) consider(row codexRow, path, root string) {
 	rl := row.Payload.RateLimits
 	if rl == nil {
 		return
+	}
+	// A blocked signal is captured before the limit_id filter below rejects
+	// the row: the reached-type row is routinely a "premium" limit_id row
+	// with both windows null, which must still be rejected for percentage
+	// purposes but which is exactly the row that says the account is
+	// blocked.
+	if rl.RateLimitReachedType != nil && *rl.RateLimitReachedType != "" {
+		if timestamp, err := time.Parse(time.RFC3339, row.Timestamp); err == nil {
+			if !timestamp.Before(r.reachedAt) {
+				r.reachedType = *rl.RateLimitReachedType
+				r.reachedAt = timestamp
+			}
+		}
 	}
 	if rl.LimitID != nil && *rl.LimitID != "codex" {
 		return
@@ -459,9 +491,11 @@ func (r *codexReport) consider(row codexRow, path, root string) {
 			planType = *rl.PlanType
 		}
 		scanErr := r.scanErr
+		reachedType, reachedAt := r.reachedType, r.reachedAt
 		*r = codexReport{timestamp: timestamp, path: path, root: root,
 			planType: planType, primary: rl.Primary, secondary: rl.Secondary}
 		r.scanErr = scanErr
+		r.reachedType, r.reachedAt = reachedType, reachedAt
 	}
 }
 
@@ -499,6 +533,12 @@ func (s codexSource) scan() (snap Snapshot) {
 		snap.Warning = "a log is cut off; the reading may be stale"
 	}
 	snap.Detail = report.path
+	// A blocked signal only counts if it is at least as new as the reading:
+	// an hour-old block followed by a fresh normal row means the block is
+	// over.
+	if report.reachedType != "" && !report.reachedAt.Before(report.timestamp) {
+		snap.LimitReached = report.reachedType
+	}
 	now := time.Now()
 	for _, entry := range []struct {
 		key, label string
@@ -524,6 +564,7 @@ func (s codexSource) scan() (snap Snapshot) {
 		if entry.window.WindowMinutes != nil && *entry.window.WindowMinutes > 0 {
 			window.Length = time.Duration(*entry.window.WindowMinutes) * time.Minute
 		}
+		window.Expired = windowExpired(window.Length, snap.Observed, snap.At)
 		if entry.window.ResetsAt != nil {
 			window.ResetsAt = time.Unix(int64(*entry.window.ResetsAt), 0)
 			if !window.ResetsAt.After(now) {

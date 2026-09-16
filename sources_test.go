@@ -410,7 +410,11 @@ func TestCodexWindowLabels(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			dir := t.TempDir()
-			line := codexLine("2026-03-01T10:00:00Z", `"codex"`, ``, tc.primary, tc.secondary)
+			// A fresh timestamp: this test is about label mapping, not
+			// expiry, so the reading must not be old enough to expire any
+			// of the windows under test.
+			ts := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+			line := codexLine(ts, `"codex"`, ``, tc.primary, tc.secondary)
 			writeSessionFile(t, dir, "a.jsonl", line+"\n")
 			snap := codexSource{defaultRoot: dir}.fetch()
 			if snap.Err != nil {
