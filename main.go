@@ -102,8 +102,15 @@ func codexSourceStates() []sourceState {
 	}
 	states := make([]sourceState, 0, len(accounts))
 	for _, label := range sortedLabels(accounts) {
-		source := codexSource{extraRoots: parseCodexRoots(accounts[label]), account: label}
-		states = append(states, sourceState{fetch: func(bool) Snapshot { return source.fetch() }})
+		raw := accounts[label]
+		// The glob is re-parsed on every fetch, not once here: it is the
+		// same reason fetchCodex() calls defaultCodexSource() fresh each
+		// time rather than caching its roots -- a sandbox/agent run
+		// directory the pattern matches can appear after startup, and a
+		// value parsed once at construction would never see it.
+		states = append(states, sourceState{fetch: func(bool) Snapshot {
+			return codexSource{extraRoots: parseCodexRoots(raw), account: label}.fetch()
+		}})
 	}
 	return states
 }

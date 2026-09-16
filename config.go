@@ -80,6 +80,15 @@ func setting(key string) string {
 	return configValues[key]
 }
 
+// settingsWithPrefixEnvKeys, when non-nil, restricts settingsWithPrefix to
+// exactly these environment variable names instead of the full ambient
+// os.Environ() -- a test seam. Production code never sets it, so the real
+// environment is used unmodified. Tests set it so a QUOTATOP_*_ACCOUNT_*
+// value a developer has exported on their own machine for their own use can
+// never leak into a test that enumerates a specific, known set of account
+// labels (or asserts that none are configured at all).
+var settingsWithPrefixEnvKeys map[string]bool
+
 // settingsWithPrefix returns every setting whose key starts with prefix,
 // keyed by the remainder of the key after the prefix -- the account label for
 // a QUOTATOP_CLAUDE_ACCOUNT_<label> or QUOTATOP_CODEX_ACCOUNT_<label> key.
@@ -112,6 +121,9 @@ func settingsWithPrefix(prefix string) map[string]string {
 	for _, entry := range os.Environ() {
 		key, value, ok := strings.Cut(entry, "=")
 		if !ok {
+			continue
+		}
+		if settingsWithPrefixEnvKeys != nil && !settingsWithPrefixEnvKeys[key] {
 			continue
 		}
 		apply(key, expandTilde(value))

@@ -815,6 +815,23 @@ func setConfigValues(t *testing.T, values map[string]string) {
 	t.Cleanup(func() { configValues = old })
 }
 
+// isolateAccountEnv restricts settingsWithPrefix, for the rest of the test,
+// to see only the named environment variables instead of the real ambient
+// environment -- so a QUOTATOP_*_ACCOUNT_* value a developer has exported on
+// their own machine for their own use can never leak into a test that
+// enumerates a specific, known set of labels (or none at all). Call it after
+// any t.Setenv for the keys the test wants visible.
+func isolateAccountEnv(t *testing.T, keys ...string) {
+	t.Helper()
+	old := settingsWithPrefixEnvKeys
+	visible := map[string]bool{}
+	for _, key := range keys {
+		visible[key] = true
+	}
+	settingsWithPrefixEnvKeys = visible
+	t.Cleanup(func() { settingsWithPrefixEnvKeys = old })
+}
+
 func TestLoadConfigPlainKeyValues(t *testing.T) {
 	path := writeConfigFile(t,
 		"QUOTATOP_CODEX_ROOTS=/var/tmp/agent-runs/session.*/codex-sessions\n"+
@@ -1264,6 +1281,7 @@ func TestSettingsWithPrefixFromConfigFileOnly(t *testing.T) {
 		"QUOTATOP_CLAUDE_ACCOUNT_personal": "/creds/personal.json",
 		"QUOTATOP_CODEX_ROOTS":             "/irrelevant",
 	})
+	isolateAccountEnv(t)
 	got := settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
 	want := map[string]string{"work": "/creds/work.json", "personal": "/creds/personal.json"}
 	if len(got) != len(want) || got["work"] != want["work"] || got["personal"] != want["personal"] {
@@ -1300,6 +1318,7 @@ func TestSettingsWithPrefixEmptyEnvironmentDisablesFileDeclaredLabel(t *testing.
 
 func TestSettingsWithPrefixEmptySuffixIsSkipped(t *testing.T) {
 	setConfigValues(t, map[string]string{"QUOTATOP_CLAUDE_ACCOUNT_": "/creds/no-label.json"})
+	isolateAccountEnv(t)
 	got := settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
 	if len(got) != 0 {
 		t.Errorf("settingsWithPrefix = %#v, want the empty-suffix entry skipped", got)
@@ -1308,11 +1327,13 @@ func TestSettingsWithPrefixEmptySuffixIsSkipped(t *testing.T) {
 
 func TestSettingsWithPrefixNilConfigValues(t *testing.T) {
 	setConfigValues(t, nil)
+	isolateAccountEnv(t)
 	got := settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
 	if len(got) != 0 {
 		t.Errorf("settingsWithPrefix with nil configValues and no matching env = %#v, want empty", got)
 	}
 	t.Setenv("QUOTATOP_CLAUDE_ACCOUNT_work", "/creds/work.json")
+	isolateAccountEnv(t, "QUOTATOP_CLAUDE_ACCOUNT_work")
 	got = settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
 	if got["work"] != "/creds/work.json" {
 		t.Errorf("settingsWithPrefix with nil configValues = %#v, want the environment alone", got)

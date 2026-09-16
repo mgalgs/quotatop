@@ -108,6 +108,8 @@ QUOTATOP_CODEX_ROOTS = ~/work/agent-runs/*/codex-sessions:~/.codex-archive
 |---------|------|
 | `QUOTATOP_CODEX_ROOTS` | extra Codex session roots (see below) |
 | `QUOTATOP_CLAUDE_CREDENTIALS` | override the path to `.credentials.json` |
+| `QUOTATOP_CLAUDE_ACCOUNT_<label>` | add a Claude panel that reads `<label>`'s own credentials file (see below) |
+| `QUOTATOP_CODEX_ACCOUNT_<label>` | add a Codex panel that scans `<label>`'s own session roots (see below) |
 | `QUOTATOP_HISTORY` | override the trend file's location |
 | `QUOTATOP_CONFIG` | override the config file's location |
 
@@ -117,6 +119,29 @@ sessions that only live outside `~/.codex` are still found — containerised or
 sandboxed runs, or an archive of older logs. A leading `~/` is expanded in each
 element, not just the first, so a home-relative second root works. A pattern
 matching nothing is ignored.
+
+### Multiple accounts
+
+Declaring one or more `QUOTATOP_CLAUDE_ACCOUNT_<label>` variables (config file
+or environment, `<label>` is any name you pick) replaces the single unnamed
+Claude panel with one panel per label, sorted by label in ascending byte
+order; `QUOTATOP_CLAUDE_CREDENTIALS` is not consulted once any are declared.
+Each value is the path to that account's own `.credentials.json`.
+
+```ini
+QUOTATOP_CLAUDE_ACCOUNT_work = ~/work/.claude/.credentials.json
+QUOTATOP_CLAUDE_ACCOUNT_personal = ~/.claude/.credentials.json
+```
+
+`QUOTATOP_CODEX_ACCOUNT_<label>` does the same for Codex: each value is a
+`QUOTATOP_CODEX_ROOTS`-style glob list naming that account's session roots.
+Declaring any `QUOTATOP_CODEX_ACCOUNT_` replaces the single unnamed Codex
+panel entirely — the default `~/.codex`/`$CODEX_HOME` root and
+`QUOTATOP_CODEX_ROOTS` are both dropped, so a value here has to name
+everywhere that account's sessions live, or the panel finds nothing.
+
+A labelled panel's title gains `· <label>`, and its `--json` entry gains an
+`account` field carrying the label — see below.
 
 ## Trend and burn rate
 
@@ -155,12 +180,19 @@ Rates are a prompt to look, not a forecast.
 anything else that wants the numbers without a terminal:
 
 ```bash
-quotatop --json | jq '.sources[] | select(.source=="claude") | .windows[]
+quotatop --json | jq '.sources[] | select(.id=="claude") | .windows[]
                       | select(.key=="weekly_all") | .percent'
 ```
 
-The document is versioned (`"schema": 1`) and stable. Two rules for consumers:
+The document is versioned (`"schema": 1`) and stable. Three rules for consumers:
 
+- **`sources` can hold more than one entry with the same `source`** — one
+  Claude or Codex account, per `QUOTATOP_CLAUDE_ACCOUNT_<label>` /
+  `QUOTATOP_CODEX_ACCOUNT_<label>` (see Configuration above); `select(.source==
+  "claude")` then matches all of them at once. Disambiguate with `account`
+  (the label, empty when unconfigured) or match `id` instead, which is
+  `source` alone with no account configured and `source/account` once one is
+  — `claude`, or `claude/work` and `claude/personal`.
 - **Iterate windows and match on `key`; never index by position.** A source can
   gain or lose a window — `weekly_scoped` only exists while a model-scoped
   weekly bar is active.
