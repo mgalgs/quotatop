@@ -26,6 +26,14 @@ const (
 	sampleMaxAge     = 9 * 24 * time.Hour // a touch over the longest (weekly) window
 )
 
+// historyKey names one window's slot in the trend history: the snapshot's
+// identity (a source, or "source/account" once accounts exist) plus the
+// window's own key. Every read and write site builds a key through this
+// function, so the key format has exactly one definition to change.
+func historyKey(identity, windowKey string) string {
+	return identity + "/" + windowKey
+}
+
 // History keeps the recent trend of every window, on disk so a restart does not
 // blank the sparklines and the burn rate.
 type History struct {
@@ -336,14 +344,14 @@ func finishProjection(current, rate float64, resetsAt, now time.Time) Projection
 // The live model fits a rate over the samples since the window last reset. A
 // window reset is a sharp drop, and averaging across one would report a
 // meaningless negative burn, so everything before the last drop is discarded.
-func (h *History) Project(source string, window Window, now time.Time) Projection {
+func (h *History) Project(identity string, window Window, now time.Time) Projection {
 	if rate, ok := sustainedRate(window, now); ok {
 		projection := finishProjection(window.Percent, rate, window.ResetsAt, now)
 		projection.Sustained = true
 		return projection
 	}
 
-	points := append([]sample{}, h.data[source+"/"+window.Key]...)
+	points := append([]sample{}, h.data[historyKey(identity, window.Key)]...)
 	current := window.Percent
 	if n := len(points); n == 0 || points[n-1].Pct != current {
 		points = append(points, sample{T: now, Pct: current})

@@ -175,7 +175,7 @@ func (m model) record(snap *Snapshot) {
 		at = snap.At
 	}
 	for _, window := range snap.Windows {
-		m.history.Add(snap.Source+"/"+window.Key, at, window.Percent)
+		m.history.Add(historyKey(snap.Identity(), window.Key), at, window.Percent)
 	}
 }
 
@@ -289,7 +289,7 @@ func recordJSONSnapshots(history *History, snaps []Snapshot, record bool) {
 			at = snap.At
 		}
 		for _, window := range snap.Windows {
-			history.Add(snap.Source+"/"+window.Key, at, window.Percent)
+			history.Add(historyKey(snap.Identity(), window.Key), at, window.Percent)
 		}
 	}
 }

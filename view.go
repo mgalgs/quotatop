@@ -189,7 +189,7 @@ func wrap(text string, width int) []string {
 
 // windowLines renders one quota bar: heading with trend and percentage, the
 // gauge, then the reset countdown and burn projection.
-func windowLines(width int, source string, window Window, history *History, now time.Time) []string {
+func windowLines(width int, identity string, window Window, history *History, now time.Time) []string {
 	right := percentText(window.Percent)
 	rightStyled := lipgloss.NewStyle().Foreground(gradientAt(window.Percent / 100).color()).Bold(true).Render(right)
 	barPct := window.Percent
@@ -206,7 +206,7 @@ func windowLines(width int, source string, window Window, history *History, now 
 	// state.
 	spark := ""
 	if !window.Expired {
-		spark = sparkline(history.Trend(source+"/"+window.Key, window.Percent, sparkWidth))
+		spark = sparkline(history.Trend(historyKey(identity, window.Key), window.Percent, sparkWidth))
 	}
 	label := styleTxt.Render(window.Label)
 	fill := width - lipgloss.Width(label) - lipgloss.Width(spark) - lipgloss.Width(right) - 2
@@ -228,7 +228,7 @@ func windowLines(width int, source string, window Window, history *History, now 
 	// projection is itself a percentage claim, so it is withheld too rather
 	// than extrapolating from the discarded reading.
 	if !window.Expired {
-		projection := history.Project(source, window, now)
+		projection := history.Project(identity, window, now)
 		if text, gap, urgent := projectionText(projection, window.ResetsAt, now); text != "" {
 			style := styleDim
 			if urgent {
@@ -297,7 +297,7 @@ func panel(width int, snap *Snapshot, history *History, now time.Time, loading b
 			if i > 0 {
 				body = append(body, "")
 			}
-			body = append(body, windowLines(content, snap.Source, window, history, now)...)
+			body = append(body, windowLines(content, snap.Identity(), window, history, now)...)
 		}
 		// A block and a warning are independent facts -- the only warning the
 		// codex scanner raises is that a log is cut off, which is a caveat on
