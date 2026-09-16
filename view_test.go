@@ -205,7 +205,7 @@ func TestHistoryRoundTripsThroughDisk(t *testing.T) {
 	}
 
 	reloaded := loadHistory(path)
-	if got := reloaded.Trend("claude/session", 20, 10); len(got) != 2 || got[0] != 10 || got[1] != 20 {
+	if got := reloaded.Trend("claude", "session", 20, 10); len(got) != 2 || got[0] != 10 || got[1] != 20 {
 		t.Errorf("reloaded trend = %v, want [10 20]", got)
 	}
 }
@@ -221,7 +221,7 @@ func TestHistoryRetainsSampleWhenPersistenceSetupFails(t *testing.T) {
 	if history.enabled {
 		t.Fatal("history persistence remained enabled after setup failure")
 	}
-	if got := history.Trend("claude/session", 10, 10); len(got) != 1 || got[0] != 10 {
+	if got := history.Trend("claude", "session", 10, 10); len(got) != 1 || got[0] != 10 {
 		t.Errorf("in-memory trend = %v, want [10]", got)
 	}
 }
@@ -243,7 +243,7 @@ func TestHistoryCompactionMergesConcurrentWriterData(t *testing.T) {
 	first.Add("claude/session", now, 2)
 	second.Add("claude/session", now.Add(time.Second), 3)
 
-	got := loadHistory(path).Trend("claude/session", 3, maxSamplesPerKey+2)
+	got := loadHistory(path).Trend("claude", "session", 3, maxSamplesPerKey+2)
 	if n := len(got); n < 2 || got[n-2] != 2 || got[n-1] != 3 {
 		t.Fatalf("concurrent writer samples were not preserved: %v", got)
 	}

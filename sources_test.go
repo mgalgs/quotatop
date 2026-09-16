@@ -1118,10 +1118,43 @@ func TestClaudeDefaultCachePathIsUnchangedForEmptyAccount(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	setConfigValues(t, nil)
-	got := defaultClaudeSource().cachePath
+	got := defaultClaudeSource().resolvedCachePath()
 	want := filepath.Join(home, ".cache", "quotatop", "claude-quota.json")
 	if got != want {
-		t.Errorf("cachePath = %q, want the unchanged default %q", got, want)
+		t.Errorf("resolvedCachePath() = %q, want the unchanged default %q", got, want)
+	}
+}
+
+// resolvedCachePath must reflect the account actually set on the source, not
+// whatever was set (typically none) at construction time: an account
+// assigned after defaultClaudeSource returns -- the only way one can be set
+// until multi-account configuration lands -- still has to land in its own
+// cache file, not silently share the account-less one.
+func TestClaudeResolvedCachePathTracksAccountSetAfterConstruction(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setConfigValues(t, nil)
+	source := defaultClaudeSource()
+	source.account = "work"
+	got := source.resolvedCachePath()
+	want := filepath.Join(home, ".cache", "quotatop", "claude-quota-work.json")
+	if got != want {
+		t.Errorf("resolvedCachePath() = %q, want the account-specific path %q", got, want)
+	}
+}
+
+// An account is user-config input, not a trusted path fragment: it must stay
+// a single filename component so it can never steer the cache outside its
+// directory or into an arbitrary subdirectory.
+func TestClaudeCacheFileNameRejectsPathTraversal(t *testing.T) {
+	for _, account := range []string{"../../secrets", "a/b", "/etc/passwd", ".."} {
+		name := claudeCacheFileName(account)
+		if strings.ContainsAny(name, `/\`) {
+			t.Errorf("claudeCacheFileName(%q) = %q, want no path separator", account, name)
+		}
+		if filepath.Base(name) != name {
+			t.Errorf("claudeCacheFileName(%q) = %q, want a single path component", account, name)
+		}
 	}
 }
 

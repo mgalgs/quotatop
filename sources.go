@@ -56,9 +56,11 @@ type Snapshot struct {
 
 // Identity is the stable id for one source/account pair: the source alone
 // when there is no account, else "source/account". Every site that needs
-// this pairing -- a history key, a cache filename -- calls this method
-// rather than concatenating the two fields itself, so the format has exactly
-// one definition to change.
+// this pairing for a history key calls this method rather than
+// concatenating the two fields itself, so the format has exactly one
+// definition to change. The Claude cache filename is a separate format --
+// it has no source component, since the cache is already Claude-specific --
+// and is built by claudeCacheFileName instead.
 func (s Snapshot) Identity() string {
 	if s.Account == "" {
 		return s.Source
@@ -130,7 +132,8 @@ type claudeSource struct {
 	// doRequest performs the usage request; nil uses http.DefaultClient.Do.
 	doRequest       func(*http.Request) (*http.Response, error)
 	credentialsPath string
-	cachePath       string
+	cacheDir        string // base directory the cache file lives in
+	cachePath       string // overrides the resolved cache path entirely; tests use this to avoid cacheDir/account
 	account         string // "" until a later round adds multi-account configuration
 }
 
@@ -141,11 +144,34 @@ type claudeSource struct {
 // account's cache -- observed live on this host, where a shared cache made a
 // plain read report the wrong account's quota for the whole 10-minute cache
 // lifetime.
+//
+// account is interpolated into the filename, not a path, so any path
+// separator in it is replaced first: an account of "../../secrets" or one
+// containing "/" must stay a single filename component, never a way to steer
+// the cache outside its directory. Accounts come from the user's config
+// file, so this boundary has to hold even though nothing sets a non-empty
+// account yet.
 func claudeCacheFileName(account string) string {
 	if account == "" {
 		return "claude-quota.json"
 	}
-	return "claude-quota-" + account + ".json"
+	safe := strings.NewReplacer("/", "_", string(filepath.Separator), "_").Replace(account)
+	return "claude-quota-" + safe + ".json"
+}
+
+// resolvedCachePath is the cache file this source actually reads and writes.
+// It is computed here, not baked into a field at construction time, so a
+// source's account -- knowable only after defaultClaudeSource returns, once
+// multi-account configuration exists -- is always reflected: baking the path
+// in early would silently freeze it at whatever account was set (typically
+// none) before the real one was assigned. cachePath, when set, overrides
+// this entirely; tests use that to point at a temp file without touching
+// cacheDir or account at all.
+func (s claudeSource) resolvedCachePath() string {
+	if s.cachePath != "" {
+		return s.cachePath
+	}
+	return filepath.Join(s.cacheDir, claudeCacheFileName(s.account))
 }
 
 // defaultClaudeSource wires the real paths: the token lives in
@@ -154,7 +180,7 @@ func defaultClaudeSource() claudeSource {
 	var source claudeSource
 	if home, err := os.UserHomeDir(); err == nil {
 		source.credentialsPath = filepath.Join(home, ".claude", ".credentials.json")
-		source.cachePath = filepath.Join(home, ".cache", "quotatop", claudeCacheFileName(source.account))
+		source.cacheDir = filepath.Join(home, ".cache", "quotatop")
 	}
 	// QUOTATOP_CLAUDE_CREDENTIALS overrides the credentials path, e.g. for a
 	// macOS user whose token lives in the Keychain and who has exported it
@@ -199,7 +225,7 @@ type claudeCache struct {
 // shape -- is a miss rather than an error: a bad cache costs one extra
 // request, not a red panel.
 func (s claudeSource) readCache() (claudePayload, time.Time, bool) {
-	raw, err := os.ReadFile(s.cachePath)
+	raw, err := os.ReadFile(s.resolvedCachePath())
 	if err != nil {
 		return claudePayload{}, time.Time{}, false
 	}
@@ -219,7 +245,8 @@ func (s claudeSource) writeCache(payload claudePayload, fetchedAt time.Time) {
 	if err != nil {
 		return
 	}
-	dir := filepath.Dir(s.cachePath)
+	target := s.resolvedCachePath()
+	dir := filepath.Dir(target)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
@@ -239,7 +266,7 @@ func (s claudeSource) writeCache(payload claudePayload, fetchedAt time.Time) {
 	if err := os.Chmod(name, 0o600); err != nil {
 		return
 	}
-	if err := os.Rename(name, s.cachePath); err != nil {
+	if err := os.Rename(name, target); err != nil {
 		os.Remove(name)
 	}
 }

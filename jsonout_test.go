@@ -217,6 +217,9 @@ func TestEncodeJSONSameSourceTwiceReturnsBoth(t *testing.T) {
 	if len(doc.Sources) != 3 {
 		t.Fatalf("len(doc.Sources) = %d, want 3", len(doc.Sources))
 	}
+	if doc.Sources[0].Account != "work" || doc.Sources[1].Account != "personal" {
+		t.Fatalf("sources = %#v, want account to disambiguate both claude snapshots", doc.Sources)
+	}
 	if doc.Sources[0].Title != "CLAUDE (work)" || doc.Sources[1].Title != "CLAUDE (personal)" {
 		t.Fatalf("sources = %#v, want both claude snapshots in input order", doc.Sources)
 	}
@@ -269,7 +272,7 @@ func TestJSONHistoryDoesNotRecordWhenDisabledAndCleansUp(t *testing.T) {
 	if len(after) >= len(before) {
 		t.Fatalf("append-only history was not compacted: %d >= %d bytes", len(after), len(before))
 	}
-	if got := loadHistory(path).Trend("claude/session", 10, 10); len(got) != 1 || got[0] != 10 {
+	if got := loadHistory(path).Trend("claude", "session", 10, 10); len(got) != 1 || got[0] != 10 {
 		t.Fatalf("cleaned history lost new JSON sample: %v", got)
 	}
 }

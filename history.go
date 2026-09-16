@@ -247,10 +247,13 @@ func (h *History) compact() error {
 	return nil
 }
 
-// Trend returns the recent percentages for a key, oldest first, with the
-// current value appended so the newest point is always live.
-func (h *History) Trend(key string, current float64, limit int) []float64 {
-	samples := h.data[key]
+// Trend returns the recent percentages for one window, oldest first, with
+// the current value appended so the newest point is always live. It takes
+// the bare identity and window key, the same shape as Project, and builds
+// the storage key itself so historyKey has exactly one call site per read
+// or write, not a copy at every caller.
+func (h *History) Trend(identity, windowKey string, current float64, limit int) []float64 {
+	samples := h.data[historyKey(identity, windowKey)]
 	points := make([]float64, 0, len(samples)+1)
 	for _, record := range samples {
 		points = append(points, record.Pct)

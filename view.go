@@ -206,7 +206,7 @@ func windowLines(width int, identity string, window Window, history *History, no
 	// state.
 	spark := ""
 	if !window.Expired {
-		spark = sparkline(history.Trend(historyKey(identity, window.Key), window.Percent, sparkWidth))
+		spark = sparkline(history.Trend(identity, window.Key, window.Percent, sparkWidth))
 	}
 	label := styleTxt.Render(window.Label)
 	fill := width - lipgloss.Width(label) - lipgloss.Width(spark) - lipgloss.Width(right) - 2
