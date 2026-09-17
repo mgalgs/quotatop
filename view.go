@@ -111,7 +111,7 @@ func sparkline(points []float64) string {
 		}
 		out.WriteRune(sparkRunes[index])
 	}
-	return styleDim.Render(out.String())
+	return currentTheme().dim.Render(out.String())
 }
 
 func percentText(pct float64) string {
@@ -234,7 +234,7 @@ func windowLines(width int, identity string, window Window, history *History, no
 	barPct := window.Percent
 	if window.Expired {
 		right = "—"
-		rightStyled = styleDim.Render(right)
+		rightStyled = currentTheme().dim.Render(right)
 		barPct = 0
 	}
 
@@ -247,7 +247,7 @@ func windowLines(width int, identity string, window Window, history *History, no
 	if !window.Expired {
 		spark = sparkline(history.Trend(identity, window.Key, window.Percent, sparkWidth))
 	}
-	label := styleTxt.Render(window.Label)
+	label := currentTheme().txt.Render(window.Label)
 	fill := width - lipgloss.Width(label) - lipgloss.Width(spark) - lipgloss.Width(right) - 2
 	if fill < 1 {
 		spark, fill = "", width-lipgloss.Width(label)-lipgloss.Width(right)-1
@@ -260,8 +260,8 @@ func windowLines(width int, identity string, window Window, history *History, no
 	// The detail line drops its least important part rather than being cut off
 	// mid-word: the absolute reset time goes first, then the gap, then the
 	// projection.
-	full := styleDim.Render(resetText(window.ResetsAt, now, false))
-	brief := styleDim.Render(resetText(window.ResetsAt, now, true))
+	full := currentTheme().dim.Render(resetText(window.ResetsAt, now, false))
+	brief := currentTheme().dim.Render(resetText(window.ResetsAt, now, true))
 	candidates := []string{full, brief}
 	// An expired window's percentage is already withheld above; a burn
 	// projection is itself a percentage claim, so it is withheld too rather
@@ -269,11 +269,11 @@ func windowLines(width int, identity string, window Window, history *History, no
 	if !window.Expired {
 		projection := history.Project(identity, window, now)
 		if text, gap, urgent := projectionText(projection, window.ResetsAt, window.Length, now); text != "" {
-			style := styleDim
+			style := currentTheme().dim
 			if urgent {
-				style = styleErr
+				style = currentTheme().err
 			}
-			separator := styleDim.Render(" · ")
+			separator := currentTheme().dim.Render(" · ")
 			candidates = append([]string{
 				full + separator + style.Render(text),
 				brief + separator + style.Render(text),
@@ -301,7 +301,7 @@ func windowLines(width int, identity string, window Window, history *History, no
 
 	lines := []string{heading, gauge(width, barPct), truncate(detail, width)}
 	if note != "" {
-		lines = append(lines, styleWrn.Render(truncate("· "+note, width)))
+		lines = append(lines, currentTheme().wrn.Render(truncate("· "+note, width)))
 	}
 	return lines
 }
@@ -311,8 +311,8 @@ func windowLines(width int, identity string, window Window, history *History, no
 func panel(width int, snap *Snapshot, history *History, now time.Time, loading bool) string {
 	content := width - 4
 	if snap == nil {
-		return box(width, styleDim.Render("···"), "",
-			[]string{styleDim.Render("waiting for first reading...")}, "", "")
+		return box(width, currentTheme().dim.Render("···"), "",
+			[]string{currentTheme().dim.Render("waiting for first reading...")}, "", "")
 	}
 
 	worst := 0.0
@@ -326,11 +326,11 @@ func panel(width int, snap *Snapshot, history *History, now time.Time, loading b
 
 	var body []string
 	if snap.Err != nil {
-		title = styleErr.Bold(true).Render(snap.Title)
+		title = currentTheme().err.Bold(true).Render(snap.Title)
 		for _, line := range wrap(snap.Err.Error(), content) {
-			body = append(body, styleErr.Render(line))
+			body = append(body, currentTheme().err.Render(line))
 		}
-		body = append(body, "", styleDim.Render("press r to retry"))
+		body = append(body, "", currentTheme().dim.Render("press r to retry"))
 	} else {
 		for i, window := range snap.Windows {
 			if i > 0 {
@@ -343,10 +343,10 @@ func panel(width int, snap *Snapshot, history *History, now time.Time, loading b
 		// everything else in the panel, including a block riding on that same
 		// truncated log. Neither should swallow the other.
 		if snap.LimitReached != "" {
-			body = append(body, "", styleErr.Render(truncate("blocked: "+humanizeReason(snap.LimitReached), content)))
+			body = append(body, "", currentTheme().err.Render(truncate("blocked: "+humanizeReason(snap.LimitReached), content)))
 		}
 		if snap.Warning != "" {
-			body = append(body, "", styleWrn.Render(truncate(snap.Warning, content)))
+			body = append(body, "", currentTheme().wrn.Render(truncate(snap.Warning, content)))
 		}
 	}
 
@@ -368,11 +368,11 @@ func compactWindowLine(width int, window Window) string {
 	}
 	var pctStyled string
 	if window.Expired {
-		pctStyled = styleDim.Render(pct)
+		pctStyled = currentTheme().dim.Render(pct)
 	} else {
 		pctStyled = lipgloss.NewStyle().Foreground(gradientAt(window.Percent / 100).color()).Bold(true).Render(pct)
 	}
-	label := styleTxt.Render(window.Label)
+	label := currentTheme().txt.Render(window.Label)
 	gaugeWidth := width - lipgloss.Width(label) - lipgloss.Width(pct) - 2
 	if gaugeWidth < 1 {
 		gaugeWidth = 1
@@ -388,8 +388,8 @@ func compactWindowLine(width int, window Window) string {
 func panelCompact(width int, snap *Snapshot, history *History, now time.Time, loading bool) string {
 	content := width - 4
 	if snap == nil {
-		return box(width, styleDim.Render("···"), "",
-			[]string{styleDim.Render("waiting for first reading...")}, "", "")
+		return box(width, currentTheme().dim.Render("···"), "",
+			[]string{currentTheme().dim.Render("waiting for first reading...")}, "", "")
 	}
 
 	worst := 0.0
@@ -403,17 +403,17 @@ func panelCompact(width int, snap *Snapshot, history *History, now time.Time, lo
 
 	var body []string
 	if snap.Err != nil {
-		title = styleErr.Bold(true).Render(snap.Title)
-		body = append(body, styleErr.Render(truncate(snap.Err.Error(), content)))
+		title = currentTheme().err.Bold(true).Render(snap.Title)
+		body = append(body, currentTheme().err.Render(truncate(snap.Err.Error(), content)))
 	} else {
 		for _, window := range snap.Windows {
 			body = append(body, compactWindowLine(content, window))
 		}
 		if snap.LimitReached != "" {
-			body = append(body, styleErr.Render(truncate("blocked: "+humanizeReason(snap.LimitReached), content)))
+			body = append(body, currentTheme().err.Render(truncate("blocked: "+humanizeReason(snap.LimitReached), content)))
 		}
 		if snap.Warning != "" {
-			body = append(body, styleWrn.Render(truncate(snap.Warning, content)))
+			body = append(body, currentTheme().wrn.Render(truncate(snap.Warning, content)))
 		}
 	}
 
@@ -425,14 +425,14 @@ func panelCompact(width int, snap *Snapshot, history *History, now time.Time, lo
 // panelFooter is the bottom-edge content every layout shares: when the
 // reading was observed, or a refresh marker while a fetch is in flight.
 func panelFooter(snap *Snapshot, loading bool, now time.Time) string {
-	footer := styleDim.Render("no reading yet")
+	footer := currentTheme().dim.Render("no reading yet")
 	if snap.Err == nil && !snap.Observed.IsZero() {
-		footer = styleDim.Render(snap.Verb + " " + compactDuration(now.Sub(snap.Observed)) + " ago")
+		footer = currentTheme().dim.Render(snap.Verb + " " + compactDuration(now.Sub(snap.Observed)) + " ago")
 	} else if snap.Err == nil {
-		footer = styleDim.Render(snap.Verb + " just now")
+		footer = currentTheme().dim.Render(snap.Verb + " just now")
 	}
 	if loading {
-		footer = styleKey.Render("refreshing")
+		footer = currentTheme().key.Render("refreshing")
 	}
 	return footer
 }
@@ -441,9 +441,9 @@ func panelFooter(snap *Snapshot, loading bool, now time.Time) string {
 // reading drops its footnote: "cached ≤10m" under a panel that failed to read
 // anything describes data that is not there.
 func panelChipFootnote(snap *Snapshot) (chip, footnote string) {
-	chip, footnote = "", styleDim.Render(snap.Footnote)
+	chip, footnote = "", currentTheme().dim.Render(snap.Footnote)
 	if snap.Chip != "" {
-		chip = styleMut.Render(snap.Chip)
+		chip = currentTheme().mut.Render(snap.Chip)
 	}
 	if snap.Err != nil {
 		footnote = ""
@@ -466,17 +466,17 @@ func (m model) headerLine(width int) string {
 		}
 	}
 	mark := lipgloss.NewStyle().Foreground(gradientAt(worst / 100).color()).Render("▌")
-	left := mark + styleTxt.Bold(true).Render(" QUOTATOP") + styleDim.Render("  "+m.host)
+	left := mark + currentTheme().txt.Bold(true).Render(" QUOTATOP") + currentTheme().dim.Render("  "+m.host)
 
-	right := styleMut.Render(m.now.Format("Mon 3:04:05 PM"))
+	right := currentTheme().mut.Render(m.now.Format("Mon 3:04:05 PM"))
 	if m.busy() {
-		right += styleDim.Render("   ") + styleKey.Render(m.spinner.View()+" refreshing")
+		right += currentTheme().dim.Render("   ") + currentTheme().key.Render(m.spinner.View()+" refreshing")
 	} else {
 		next := m.nextRefresh().Sub(m.now)
 		if next < 0 {
 			next = 0
 		}
-		right += styleDim.Render("   ↻ " + compactDuration(next))
+		right += currentTheme().dim.Render("   ↻ " + compactDuration(next))
 	}
 
 	gap := width - lipgloss.Width(left) - lipgloss.Width(right)
@@ -513,19 +513,19 @@ func (m model) footerLine(width int) string {
 	}
 	parts := make([]string, 0, len(keys))
 	for _, entry := range keys {
-		parts = append(parts, styleKey.Render(entry.key)+styleDim.Render(" "+entry.label))
+		parts = append(parts, currentTheme().key.Render(entry.key)+currentTheme().dim.Render(" "+entry.label))
 	}
-	left := strings.Join(parts, styleDim.Render(" · "))
+	left := strings.Join(parts, currentTheme().dim.Render(" · "))
 	// The current layout's name, so the user knows what l just switched to.
 	// It is only shown off the default: in full the footer keeps exactly
 	// today's content, and there is nothing that was just switched.
 	if name := m.layoutName(); name != layoutFull {
-		left += styleDim.Render(" · ") + styleMut.Render(name)
+		left += currentTheme().dim.Render(" · ") + currentTheme().mut.Render(name)
 	}
 
 	right := ""
 	if name, worst, ok := m.tightest(); ok {
-		right = styleDim.Render("tightest ") +
+		right = currentTheme().dim.Render("tightest ") +
 			lipgloss.NewStyle().Foreground(gradientAt(worst/100).color()).Render(
 				strings.ToLower(name)+" "+percentText(worst))
 	}
@@ -548,22 +548,22 @@ func (m model) helpBody(width int) string {
 	for _, row := range rows {
 		// Wide enough to leave a gap after the longest key list, which is
 		// exactly 16 cells and would otherwise run into its description.
-		body = append(body, styleKey.Render(row[0])+
-			styleDim.Render(strings.Repeat(" ", max(2, 18-lipgloss.Width(row[0])))+row[1]))
+		body = append(body, currentTheme().key.Render(row[0])+
+			currentTheme().dim.Render(strings.Repeat(" ", max(2, 18-lipgloss.Width(row[0])))+row[1]))
 	}
 	body = append(body, "",
-		styleMut.Render("Claude")+styleDim.Render("  live account quota via the usage API, cached 10m"),
-		styleMut.Render("Codex ")+styleDim.Render("  latest rate limits recorded in local session logs"),
+		currentTheme().mut.Render("Claude")+currentTheme().dim.Render("  live account quota via the usage API, cached 10m"),
+		currentTheme().mut.Render("Codex ")+currentTheme().dim.Render("  latest rate limits recorded in local session logs"),
 		"",
-		styleDim.Render(fmt.Sprintf("polling every %s · trend and burn rate from %s",
+		currentTheme().dim.Render(fmt.Sprintf("polling every %s · trend and burn rate from %s",
 			compactDuration(m.interval), shortenPath(m.history.path))),
-		styleDim.Render("5-hour rate from the last 90m · weekly from the window's own elapsed pace"))
+		currentTheme().dim.Render("5-hour rate from the last 90m · weekly from the window's own elapsed pace"))
 	for _, source := range m.sources {
 		if source.snap != nil && source.snap.Source == "codex" && source.snap.Detail != "" {
-			body = append(body, styleDim.Render("codex source "+shortenPath(source.snap.Detail)))
+			body = append(body, currentTheme().dim.Render("codex source "+shortenPath(source.snap.Detail)))
 		}
 	}
-	return box(width, styleTxt.Bold(true).Render("KEYS"), "", body, "", "")
+	return box(width, currentTheme().txt.Bold(true).Render("KEYS"), "", body, "", "")
 }
 
 // humanizeReason turns a snake_case reason code into readable words.
@@ -604,10 +604,10 @@ func fitHeight(view string, height int) string {
 		return view
 	}
 	if height < 2 {
-		return styleDim.Render(truncationMarker)
+		return currentTheme().dim.Render(truncationMarker)
 	}
 	kept := append([]string(nil), lines[:height-1]...)
-	kept = append(kept, styleDim.Render(truncationMarker))
+	kept = append(kept, currentTheme().dim.Render(truncationMarker))
 	return strings.Join(kept, "\n")
 }
 

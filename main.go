@@ -122,7 +122,7 @@ func codexSourceStates() []sourceState {
 func newModel(interval time.Duration, history *History) model {
 	spin := spinner.New()
 	spin.Spinner = spinner.Dot
-	spin.Style = styleKey
+	spin.Style = currentTheme().key
 
 	host, err := os.Hostname()
 	if err != nil {
