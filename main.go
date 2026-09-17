@@ -295,6 +295,11 @@ func terminalWidth(fallback int) int {
 	return fallback
 }
 
+// version is stamped by the release workflow with the git tag it built from
+// (-ldflags "-X main.version=..."). An unstamped build says "dev", so a
+// binary someone built themselves never claims to be a release.
+var version = "dev"
+
 const usageText = `quotatop -- live Claude and Codex quota in one window.
 
 Usage: quotatop [options]
@@ -324,7 +329,12 @@ func main() {
 	layout := flag.String("layout", "", "layout for --snapshot: full, compact or vertical (default full)")
 	theme := flag.Int("theme", 0, "theme index for --snapshot")
 	noHistory := flag.Bool("no-history", false, "do not read or write the trend history file")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println("quotatop", version)
+		return
+	}
 	if flag.NArg() > 0 {
 		fmt.Fprintf(os.Stderr, "quotatop: unexpected argument %q\n", flag.Arg(0))
 		flag.Usage()

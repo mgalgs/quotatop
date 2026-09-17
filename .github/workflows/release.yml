@@ -48,8 +48,12 @@ jobs:
             echo "building $out"
             # -trimpath so the binary does not embed this runner's paths;
             # -s -w drops the symbol and DWARF tables, which is most of the
-            # download size and nothing a user of a CLI needs.
-            go build -trimpath -ldflags "-s -w" -o "dist/${out}" .
+            # download size and nothing a user of a CLI needs. -X stamps the
+            # tag into main.version so --version reports the release it came
+            # from rather than the "dev" an unstamped build reports.
+            go build -trimpath \
+              -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+              -o "dist/${out}" .
             (cd dist && sha256sum "$out" >> checksums.txt)
           done
 
