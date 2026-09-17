@@ -287,9 +287,10 @@ const (
 
 // sustainedRate is the burn rate measured over the window's own elapsed
 // activity: the percentage accrued since an anchor, divided by the hours
-// since that anchor, where the anchor is the window's most recent zero
-// reading (or, if history does not reach that far back, the window's own
-// open — at which point the bar is defined to be at zero too). It exists
+// since that anchor, where the anchor is the first activity after the
+// window's most recent zero reading (or, if history does not reach that far
+// back, the window's own open — at which point the bar is defined to be at
+// zero too). It exists
 // because a weekly window's elapsed time already contains the nights,
 // weekends and days away from the keyboard that a recent slope does not:
 // extrapolating a working-hours rate across mostly-sleep time overstates the

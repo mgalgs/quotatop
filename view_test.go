@@ -655,11 +655,11 @@ func TestProjectSustainedMeasuresFromFirstActivity(t *testing.T) {
 		ResetsAt: now.Add(72 * time.Hour)} // 96h elapsed since the window opened
 	history := loadHistory("")
 	windowStart := now.Add(-96 * time.Hour)
-	history.Add("claude/weekly_all", windowStart, 0)              // the rollover zero
-	history.Add("claude/weekly_all", now.Add(-95*time.Hour), 0)   // still zero; deduped away by Add
-	history.Add("claude/weekly_all", now.Add(-48*time.Hour), 0)   // still zero; deduped away by Add
-	history.Add("claude/weekly_all", now.Add(-25*time.Hour), 0)   // still zero; deduped away by Add
-	history.Add("claude/weekly_all", now.Add(-24*time.Hour), 3)   // bar leaves zero: activity begins
+	history.Add("claude/weekly_all", windowStart, 0)            // the rollover zero
+	history.Add("claude/weekly_all", now.Add(-95*time.Hour), 0) // still zero; deduped away by Add
+	history.Add("claude/weekly_all", now.Add(-48*time.Hour), 0) // still zero; deduped away by Add
+	history.Add("claude/weekly_all", now.Add(-25*time.Hour), 0) // still zero; deduped away by Add
+	history.Add("claude/weekly_all", now.Add(-24*time.Hour), 3) // bar leaves zero: activity begins
 	history.Add("claude/weekly_all", now.Add(-12*time.Hour), 8)
 	projection := history.Project("claude", window, now)
 	if !projection.Valid || !projection.Sustained {
