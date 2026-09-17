@@ -328,13 +328,18 @@ func TestOverlayContrastFlipsAcrossGradient(t *testing.T) {
 		}
 	}
 	// Sweeping the whole gradient, the ink must always land on the opposite
-	// side of the luminance range from the cell under it.
-	for i := 0; i <= 100; i++ {
-		cell := gradientAt(float64(i) / 100)
-		ink := overlayContrast(cell)
-		if (cell.luminance() >= 0.5) == (ink.luminance() >= 0.5) {
-			t.Errorf("t=%d: cell %s (luminance %.3f) got ink %s (luminance %.3f) on the same side of the range",
-				i, cell.hex(), cell.luminance(), ink.hex(), ink.luminance())
+	// side of the luminance range from the cell under it. Every theme, not
+	// just the default: muted's whole gradient sits above the threshold, so
+	// this is what pins its always-dark-ink behaviour.
+	for ti := range themes {
+		setThemeIndex(t, ti)
+		for i := 0; i <= 100; i++ {
+			cell := gradientAt(float64(i) / 100)
+			ink := overlayContrast(cell)
+			if (cell.luminance() >= 0.5) == (ink.luminance() >= 0.5) {
+				t.Errorf("theme %d (%s) t=%d: cell %s (luminance %.3f) got ink %s (luminance %.3f) on the same side of the range",
+					ti, themes[ti].name, i, cell.hex(), cell.luminance(), ink.hex(), ink.luminance())
+			}
 		}
 	}
 }

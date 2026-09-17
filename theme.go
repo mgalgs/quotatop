@@ -78,10 +78,16 @@ func overlayEndpoints() (dark, light rgb) {
 // the gradient, mid-tone included.
 //
 // The 0.5 threshold is the midpoint of the linear 0..1 scale the weights
-// produce: every theme's gradient stops sit clearly on one side or the other
-// (default green through orange land at 0.60-0.77, red at 0.45, and the dim
-// track never above 0.19), so the switch happens between the orange and red
-// stops where it should, not inside a run of similar cells.
+// produce. In most themes the stops straddle it (default green through
+// orange land at 0.60-0.77, red at 0.45, and the dimmed track stays near
+// 0.19), so the switch happens between the orange and red stops where it
+// should, not inside a run of similar cells. The exception is muted, whose
+// whole gradient sits above the threshold (stops 0.51-0.70), so its filled
+// cells always take the dark ink and the overlay never flips to light. That
+// is the better outcome, not a miss: over the rose end (luminance 0.506) the
+// dark ink #3a3f47 separates by about 1.9:1 while the light ink #c9ccd2
+// would separate by only about 1.5:1 -- the theme is deliberately low
+// contrast, and the threshold picks its better endpoint anyway.
 func overlayContrast(c rgb) rgb {
 	dark, light := overlayEndpoints()
 	if c.luminance() < 0.5 {
