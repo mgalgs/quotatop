@@ -216,6 +216,42 @@ func TestClaudeSourceStatesCredentialsPathIsTheConfiguredAccountPath(t *testing.
 	}
 }
 
+// A QUOTATOP_CLAUDE_ACCOUNT_ value is not tilde-expanded and can be relative
+// (nothing stops a config line like "creds/work.json"), so the snapshot's
+// CredentialsPath must still come out absolute: it is documented as always
+// absolute, and a consumer routes --claude-credentials off it verbatim.
+func TestClaudeSourceStatesCredentialsPathIsResolvedToAbsolute(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setConfigValues(t, nil)
+	oldwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(oldwd) })
+	if err := os.Chdir(home); err != nil {
+		t.Fatal(err)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rel := filepath.Join("creds", "work.json")
+	t.Setenv("QUOTATOP_CLAUDE_ACCOUNT_work", rel)
+	isolateAccountEnv(t, "QUOTATOP_CLAUDE_ACCOUNT_work")
+
+	states := claudeSourceStates()
+	if len(states) != 1 {
+		t.Fatalf("claudeSourceStates() has %d entries, want 1", len(states))
+	}
+	snap := states[0].fetch(true)
+	want := filepath.Join(cwd, rel)
+	if snap.CredentialsPath != want {
+		t.Errorf("CredentialsPath = %q, want the resolved absolute path %q", snap.CredentialsPath, want)
+	}
+}
+
 // Each QUOTATOP_CLAUDE_ACCOUNT_ source must read its own credentialsPath, not
 // a shared one: personal's file exists but carries no token, work's file is
 // missing outright, so the two fail with different, file-specific errors --

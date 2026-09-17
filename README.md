@@ -257,7 +257,10 @@ matching `QUOTATOP_CLAUDE_ACCOUNT_<label>` value, `QUOTATOP_CLAUDE_CREDENTIALS`,
 or the `~/.claude/.credentials.json` default, whichever applied. It is set
 regardless of whether the fetch succeeded, so an errored source can still be
 identified by which account's file it tried to read. Codex has no single
-credentials file, so its `credentials_path` is always `""`. A consumer that
+credentials file, so its `credentials_path` is always `""`; an unlabeled
+Claude source falls back to `""` too, in the one case none of the above can
+resolve it — no `QUOTATOP_CLAUDE_ACCOUNT_<label>` or `QUOTATOP_CLAUDE_CREDENTIALS`
+override, and the home directory itself can't be determined. A consumer that
 manages several Claude accounts can use this to route a separate action —
 launching a process, say — at the same credentials file this reading came
 from.
