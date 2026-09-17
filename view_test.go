@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
@@ -1335,9 +1336,10 @@ func TestPanelCompactWithProjectionIsRectangular(t *testing.T) {
 			{Key: "weekly_all", Label: "Weekly", Percent: 41, Length: 168 * time.Hour, ResetsAt: now.Add(127 * time.Hour)},
 			{Key: "weekly_scoped", Label: "Weekly · Fable", Percent: 12, Length: 168 * time.Hour, ResetsAt: now.Add(127 * time.Hour)},
 		}}
+	cols := computeCompactColumns([]sourceState{{snap: snap}})
 	for _, layout := range []string{layoutCompact, layoutCompactVertical} {
 		for _, width := range []int{34, 46, 66, 132} {
-			everyLineWidth(t, panelCompact(width, snap, history, now, false), width, layout)
+			everyLineWidth(t, panelCompact(width, snap, history, now, false, cols), width, layout)
 		}
 	}
 }
@@ -1357,14 +1359,15 @@ func TestCompactForecastShownOnlyWhenProjected(t *testing.T) {
 	expired.Expired = true
 
 	plain := func(line string) string { return ansiStrip(line) }
+	cols := computeCompactColumns([]sourceState{{snap: &Snapshot{Windows: []Window{withProj, without, expired}}}})
 
-	if line := compactWindowLine(66, "claude", withProj, history, now); !strings.Contains(plain(line), "full in") {
+	if line := compactWindowLine(66, "claude", withProj, history, now, cols); !strings.Contains(plain(line), "full in") {
 		t.Errorf("window with a projection: bar line = %q, want the forecast headline inside the bar", line)
 	}
-	if line := compactWindowLine(66, "claude", without, history, now); strings.Contains(plain(line), "full in") || strings.Contains(plain(line), "at reset") || strings.Contains(plain(line), "steady") {
+	if line := compactWindowLine(66, "claude", without, history, now, cols); strings.Contains(plain(line), "full in") || strings.Contains(plain(line), "at reset") || strings.Contains(plain(line), "steady") {
 		t.Errorf("window without a projection: bar line = %q, want no forecast text", line)
 	}
-	if line := compactWindowLine(66, "claude", expired, history, now); !strings.Contains(plain(line), "—") || strings.Contains(plain(line), "full in") {
+	if line := compactWindowLine(66, "claude", expired, history, now, cols); !strings.Contains(plain(line), "—") || strings.Contains(plain(line), "full in") {
 		t.Errorf("expired window: bar line = %q, want a dash and no forecast", line)
 	}
 }
@@ -1381,16 +1384,17 @@ func TestCompactForecastOverlayInEveryTheme(t *testing.T) {
 	snap := &Snapshot{Source: "claude", Title: "CLAUDE", Observed: now,
 		Windows: []Window{{Key: "weekly_all", Label: "Weekly", Percent: 41,
 			Length: 168 * time.Hour, ResetsAt: now.Add(127 * time.Hour)}}}
+	cols := computeCompactColumns([]sourceState{{snap: snap}})
 	for i := range themes {
 		setThemeIndex(t, i)
 		width := 66
-		panel := panelCompact(width, snap, history, now, false)
+		panel := panelCompact(width, snap, history, now, false, cols)
 		everyLineWidth(t, panel, width, themes[i].name)
 		line := strings.Split(panel, "\n")[1]
 		if !strings.Contains(ansiStrip(line), "full in") {
 			t.Errorf("theme %d (%s): overlay text missing from the bar line", i, themes[i].name)
 		}
-		gaugeWidth := width - 4 - 6 - 3 - 2 // content minus label, percentage and the two separators
+		gaugeWidth := (width - 4) - cols.label - cols.pct - 2 // content minus label, percentage and the two separators
 		if got := lipgloss.Width(gaugeWithForecast(gaugeWidth, 41, "full in 2d 11h")); got != gaugeWidth {
 			t.Errorf("theme %d: overlaid bar width = %d, want %d", i, got, gaugeWidth)
 		}
@@ -1441,13 +1445,14 @@ func TestCompactForecastFitRuleAtPanelWidth(t *testing.T) {
 		Length: 168 * time.Hour, ResetsAt: now.Add(127 * time.Hour)}
 	without := withProj
 	without.Length = 0
+	cols := computeCompactColumns([]sourceState{{snap: &Snapshot{Windows: []Window{withProj, without}}}})
 
 	// gauge width at panel width W is W-11; the 14-cell forecast needs 22.
-	if got, want := compactWindowLine(31, "claude", withProj, history, now),
-		compactWindowLine(31, "claude", without, history, now); got != want {
+	if got, want := compactWindowLine(31, "claude", withProj, history, now, cols),
+		compactWindowLine(31, "claude", without, history, now, cols); got != want {
 		t.Errorf("at the narrow width the bar should be plain and identical:\ngot:  %q\nwant: %q", got, want)
 	}
-	if line := compactWindowLine(33, "claude", withProj, history, now); !strings.Contains(ansiStrip(line), "full in") {
+	if line := compactWindowLine(33, "claude", withProj, history, now, cols); !strings.Contains(ansiStrip(line), "full in") {
 		t.Errorf("just above the fit boundary the forecast should appear: %q", line)
 	}
 }
@@ -1595,9 +1600,16 @@ func parseCompactRowsInLine(line string) []compactRow {
 		for labelStart < bar.start && (runes[labelStart] == ' ' || runes[labelStart] == '│') {
 			labelStart++
 		}
+		// last[1] is a byte offset into prefix (regexp indices are always
+		// byte offsets), but every other position here is a rune index into
+		// runes -- prefix contains multi-byte runes (the box border │, the
+		// · in "Weekly · Fable", the — of an expired window), so a caller
+		// that mixed the two would overshoot by the extra bytes those
+		// characters contribute. Re-count in runes to stay consistent.
+		pctEnd := rowStart + utf8.RuneCountInString(prefix[:last[1]])
 		rows = append(rows, compactRow{
 			labelStart: labelStart,
-			pctEnd:     rowStart + last[1],
+			pctEnd:     pctEnd,
 			barStart:   bar.start,
 			barWidth:   bar.width,
 		})
