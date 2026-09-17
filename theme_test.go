@@ -66,8 +66,8 @@ func TestThemeZeroMatchesPreChangeFixture(t *testing.T) {
 		file     string
 		showHelp bool
 	}{
-		{"frame", "testdata/themes/theme-0.txt", false},
-		{"help", "testdata/themes/theme-0-help.txt", true},
+		{"frame", "testdata/themes/theme-0-prechange.txt", false},
+		{"help", "testdata/themes/theme-0-prechange-help.txt", true},
 	} {
 		want, err := os.ReadFile(tc.file)
 		if err != nil {
