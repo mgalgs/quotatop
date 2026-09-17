@@ -291,7 +291,13 @@ func (s claudeSource) writeCache(payload claudePayload, fetchedAt time.Time) {
 }
 
 func (s claudeSource) fetch(fresh bool) Snapshot {
-	snap := Snapshot{Source: "claude", Account: s.account, CredentialsPath: s.credentialsPath, Title: panelTitle("CLAUDE", s.account), Verb: "fetched", At: time.Now(),
+	credentialsPath := s.credentialsPath
+	if credentialsPath != "" {
+		if abs, err := filepath.Abs(credentialsPath); err == nil {
+			credentialsPath = abs
+		}
+	}
+	snap := Snapshot{Source: "claude", Account: s.account, CredentialsPath: credentialsPath, Title: panelTitle("CLAUDE", s.account), Verb: "fetched", At: time.Now(),
 		Footnote: "account · 10m cache"}
 	now := time.Now()
 	if !fresh {

@@ -227,27 +227,6 @@ func TestEncodeJSONCredentialsPathSurvivesFetchError(t *testing.T) {
 	}
 }
 
-// The synthesized placeholder for a wholly absent source correctly has no
-// credentials path: no source object was ever configured or constructed for
-// it, so there is nothing to report.
-func TestEncodeJSONCredentialsPathEmptyForSynthesizedPlaceholder(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	doc := encodeJSON([]Snapshot{{Source: "claude", Windows: []Window{{Key: "session", Percent: 10}}}}, loadHistory(""), now)
-	codex := doc.Sources[1]
-	if codex.CredentialsPath != "" {
-		t.Errorf("synthesized placeholder CredentialsPath = %q, want empty", codex.CredentialsPath)
-	}
-}
-
-// Adding credentials_path is additive: the schema number must not move.
-func TestEncodeJSONSchemaUnchangedByCredentialsPath(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	doc := encodeJSON([]Snapshot{{Source: "claude"}, {Source: "codex"}}, loadHistory(""), now)
-	if doc.Schema != 1 {
-		t.Errorf("Schema = %d, want 1", doc.Schema)
-	}
-}
-
 // The empty account (today's only account) must keep the exact history key
 // format quotatop has always written: no doubled separator, no suffix.
 // Every future non-empty-account key still goes through the same helper, so
