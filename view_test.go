@@ -157,6 +157,7 @@ func TestWindowLinesExpiredWindowSuppressesProjection(t *testing.T) {
 // live one -- that is the dead-window-reported-as-current bug relocated from
 // the bar to the rest of the screen.
 func TestTightestIgnoresExpiredWindows(t *testing.T) {
+	isolateStatePath(t)
 	now := time.Now()
 	m := newModel(20*time.Second, loadHistory(""))
 	m.now = now
@@ -174,6 +175,7 @@ func TestTightestIgnoresExpiredWindows(t *testing.T) {
 // share a source: the header's whole point is to say which panel needs
 // attention, and "CLAUDE 5-hour" is ambiguous the moment there are two.
 func TestTightestNamesTheRightAccount(t *testing.T) {
+	isolateStatePath(t)
 	now := time.Now()
 	m := newModel(20*time.Second, loadHistory(""))
 	m.now = now
@@ -207,6 +209,7 @@ func TestPanelBlockedSourceAlsoShowsWarning(t *testing.T) {
 }
 
 func TestViewFitsTerminalWidth(t *testing.T) {
+	isolateStatePath(t)
 	now := time.Now()
 	for _, width := range []int{60, 94, 100, 200} {
 		for _, help := range []bool{false, true} {
@@ -286,6 +289,7 @@ func threeWindowSources(now time.Time, n int) []sourceState {
 // what matters, and a test that only checks 80x24 passes while the layout
 // breaks at 81x25.
 func TestViewFitsHeightAndWidthInEveryLayout(t *testing.T) {
+	isolateStatePath(t)
 	now := time.Now()
 	for _, layout := range layouts {
 		for _, count := range []int{3, 5} {
@@ -317,6 +321,7 @@ func TestViewFitsHeightAndWidthInEveryLayout(t *testing.T) {
 // A terminal shorter than the content must be met with truncation and a
 // visible marker on the last retained line -- not overflow, and not silence.
 func TestViewTruncatesWithMarkerWhenTallerThanTerminal(t *testing.T) {
+	isolateStatePath(t)
 	now := time.Now()
 	m := newModel(20*time.Second, loadHistory(""))
 	m.width, m.now = 80, now
@@ -391,6 +396,7 @@ func TestFitHeight(t *testing.T) {
 // stacked Claude-style panels fits a fresh 24-row terminal at 80 columns, with
 // no truncation, and without losing what the monitor exists to show.
 func TestCompactThreePanelsFitIn24RowsAt80Columns(t *testing.T) {
+	isolateStatePath(t)
 	now := time.Now()
 	m := newModel(20*time.Second, loadHistory(""))
 	m.width, m.height, m.now, m.layout = 80, 24, now, layoutCompact
@@ -417,6 +423,7 @@ func TestCompactThreePanelsFitIn24RowsAt80Columns(t *testing.T) {
 // that does not fit: both must survive the squeeze, and an expired window
 // still withholds its stale percentage.
 func TestCompactKeepsBlockedAndErrorStates(t *testing.T) {
+	isolateStatePath(t)
 	now := time.Now()
 	m := newModel(20*time.Second, loadHistory(""))
 	m.width, m.height, m.now, m.layout = 80, 24, now, layoutCompact
@@ -448,6 +455,7 @@ func TestCompactKeepsBlockedAndErrorStates(t *testing.T) {
 // of the block must remain, or the compact panel has hidden the one state the
 // monitor exists to surface.
 func TestCompactTruncatesButKeepsBlockedMarker(t *testing.T) {
+	isolateStatePath(t)
 	now := time.Now()
 	m := newModel(20*time.Second, loadHistory(""))
 	m.width, m.height, m.now, m.layout = 80, 24, now, layoutCompact
@@ -514,6 +522,7 @@ func visualExtent(t *testing.T, line string) int {
 }
 
 func TestVerticalIsOnePanelPerRowAtAnyWidth(t *testing.T) {
+	isolateStatePath(t)
 	now := time.Now()
 	for _, width := range []int{80, 132, 200} {
 		m := newModel(20*time.Second, loadHistory(""))
@@ -542,6 +551,7 @@ func TestVerticalIsOnePanelPerRowAtAnyWidth(t *testing.T) {
 }
 
 func TestViewRendersThreePanelsAsTwoRows(t *testing.T) {
+	isolateStatePath(t)
 	now := time.Now()
 	m := newModel(20*time.Second, loadHistory(""))
 	m.width, m.now = 132, now
@@ -554,6 +564,7 @@ func TestViewRendersThreePanelsAsTwoRows(t *testing.T) {
 }
 
 func TestViewRendersFivePanelsAsTwoTwoOne(t *testing.T) {
+	isolateStatePath(t)
 	now := time.Now()
 	m := newModel(20*time.Second, loadHistory(""))
 	m.width, m.now = 132, now
@@ -590,6 +601,7 @@ func visualColumn(t *testing.T, line, substr string) int {
 // each line independently, so a short line drifts away from the column it
 // belongs under unless every line was padded to the same width first.
 func TestViewTrailingRowStaysUnderFullRowColumn(t *testing.T) {
+	isolateStatePath(t)
 	now := time.Now()
 	m := newModel(20*time.Second, loadHistory(""))
 	m.width, m.now = 180, now
@@ -631,6 +643,7 @@ func TestViewTrailingRowStaysUnderFullRowColumn(t *testing.T) {
 // and that the short trailing row keeps a full row's per-panel width rather
 // than stretching to fill it.
 func TestViewRendersTwoClaudeAccountsPlusCodexRealistically(t *testing.T) {
+	isolateStatePath(t)
 	now := time.Now()
 	m := newModel(20*time.Second, loadHistory(""))
 	m.width, m.now = 132, now
@@ -684,6 +697,7 @@ func TestViewRendersTwoClaudeAccountsPlusCodexRealistically(t *testing.T) {
 // after the first: a model can carry more than one, and going silent about
 // the rest is a silently wrong help line rather than a missing one.
 func TestHelpBodyListsEveryCodexSourceDetail(t *testing.T) {
+	isolateStatePath(t)
 	now := time.Now()
 	m := newModel(20*time.Second, loadHistory(""))
 	m.now, m.showHelp = now, true

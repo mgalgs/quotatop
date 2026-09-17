@@ -53,6 +53,7 @@ func captureStdout(t *testing.T, d func()) (string, string) {
 // threaded through as a line budget, and an unknown layout name is a hard
 // error, not a silent fallback to the default.
 func TestRenderSnapshotRejectsUnknownLayout(t *testing.T) {
+	isolateStatePath(t)
 	t.Setenv("NO_COLOR", "1")
 	isolateAccountEnv(t)
 
@@ -89,6 +90,7 @@ func TestRenderSnapshotRejectsUnknownLayout(t *testing.T) {
 // --height is a hard line budget on the rendered frame, threaded all the way
 // down to View() -- the property every layout in this round must satisfy.
 func TestRenderSnapshotTruncatesToHeight(t *testing.T) {
+	isolateStatePath(t)
 	t.Setenv("NO_COLOR", "1")
 	isolateAccountEnv(t)
 	fetchModel := func() model {

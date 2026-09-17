@@ -38,8 +38,8 @@ Give it its own tmux window and leave it there.
 |-----|------|
 | `r` | refresh all sources now |
 | `R` | refresh Claude past its 10-minute cache (a real API call) |
-| `l` | cycle layout: full, compact, vertical |
-| `t` | cycle colour themes |
+| `l` | cycle layout: full, compact, vertical (the choice is remembered across runs) |
+| `t` | cycle colour themes (the choice is remembered across runs) |
 | `?` | toggle the key list and data-source notes |
 | `q` / `esc` / `ctrl-c` | quit |
 
@@ -116,7 +116,15 @@ QUOTATOP_CODEX_ROOTS = ~/work/agent-runs/*/codex-sessions:~/.codex-archive
 | `QUOTATOP_CLAUDE_ACCOUNT_<label>` | add a Claude panel that reads `<label>`'s own credentials file (see below) |
 | `QUOTATOP_CODEX_ACCOUNT_<label>` | add a Codex panel that scans `<label>`'s own session roots (see below) |
 | `QUOTATOP_HISTORY` | override the trend file's location |
+| `QUOTATOP_STATE` | override the persisted-preferences file's location (environment only — the config file does not supply it) |
 | `QUOTATOP_CONFIG` | override the config file's location |
+
+The theme and layout picked with `t` and `l` are remembered across runs in
+`$XDG_STATE_HOME/quotatop/state.json` (or
+`~/.local/state/quotatop/state.json` when `XDG_STATE_HOME` is unset),
+overridden by `QUOTATOP_STATE`. An explicit `--theme` or `--layout` flag
+beats the remembered value for that one `--snapshot` frame without changing
+what is remembered.
 
 `QUOTATOP_CODEX_ROOTS` is a `:`-separated list of paths, each expanded as a
 shell-style glob, each match walked like the default root. It exists so

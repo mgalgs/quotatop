@@ -175,13 +175,15 @@ var themes = []theme{
 	},
 }
 
-// themeIndex is the index into themes of the current theme. It starts at 0 on
-// every launch and is not persisted: the choice lasts as long as the process.
+// themeIndex is the index into themes of the current theme. main applies the
+// persisted theme here at startup and the t key changes it, so the choice
+// survives across runs.
 //
-// Safety invariant: themeIndex may only be written from model.Update (the t
-// key) and from renderSnapshot (the --theme flag, after which the process
-// exits), and read from View() and its helpers, plus once from newModel at
-// construction, before any Update has run. That is safe because rendering is
+// Safety invariant: themeIndex may only be written from main at startup
+// (before the program starts or before the single snapshot frame renders),
+// from model.Update (the t key), and from renderSnapshot (the --theme flag,
+// after which the process exits), and read from View() and its helpers,
+// plus once from newModel at construction, before any Update has run. That is safe because rendering is
 // single-goroutine: Bubble Tea runs Update and View on the same goroutine and
 // nothing inside a tea.Cmd touches a style, and there are no t.Parallel()
 // tests in this repo, so no test can race on it either. A future
