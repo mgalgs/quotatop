@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -729,7 +730,7 @@ func TestProjectSustainedIgnoresZeroSampleFromPreviousWindow(t *testing.T) {
 // to measuring from the window's own open (pct 0) instead of abandoning the
 // model for the volatile live slope. Only a window that is itself still
 // young (TestProjectSustainedFallsBackEarlyInWindow) falls through.
-func TestProjectSustainedFallsBackToWindowOpenWhenActivityTooRecent(t *testing.T) {
+func TestProjectSustainedFloorsDenominatorWhenActivityIsRecent(t *testing.T) {
 	now := time.Now()
 	window := Window{Key: "weekly_all", Percent: 8, Length: 168 * time.Hour,
 		ResetsAt: now.Add(130 * time.Hour)} // 38h elapsed since the window opened
@@ -740,9 +741,54 @@ func TestProjectSustainedFallsBackToWindowOpenWhenActivityTooRecent(t *testing.T
 	if !projection.Valid || !projection.Sustained {
 		t.Fatalf("expected a sustained projection: %+v", projection)
 	}
-	if projection.RatePerHour < 0.19 || projection.RatePerHour > 0.22 {
-		t.Errorf("rate = %v%%/h, want ~0.21 (8/38 from window open, not the recent slope)",
+	// The anchor is 1h old, so the denominator floors at sustainedMinElapsed:
+	// (8-4)/12 rather than the window-open 8/38 this used to re-anchor to.
+	if projection.RatePerHour < 0.31 || projection.RatePerHour > 0.35 {
+		t.Errorf("rate = %v%%/h, want ~0.33 ((8-4)/12, the floored denominator)",
 			projection.RatePerHour)
+	}
+}
+
+// The denominator floor used to be implemented by re-anchoring to the window's
+// own open, which made the reading jump as the anchor aged past 12h: the same
+// data read calm on one side of the boundary and red on the other.
+func TestProjectSustainedIsContinuousAcrossTheDenominatorFloor(t *testing.T) {
+	now := time.Now()
+	rateAt := func(anchorAge time.Duration) float64 {
+		window := Window{Key: "weekly_all", Percent: 42, Length: 168 * time.Hour,
+			ResetsAt: now.Add(68 * time.Hour)} // 100h elapsed since the window opened
+		history := loadHistory("")
+		history.Add("claude/weekly_all", now.Add(-100*time.Hour), 0)
+		history.Add("claude/weekly_all", now.Add(-anchorAge), 0.5)
+		projection := history.Project("claude", window, now)
+		if !projection.Valid || !projection.Sustained {
+			t.Fatalf("expected a sustained projection at anchor age %v: %+v", anchorAge, projection)
+		}
+		return projection.RatePerHour
+	}
+	justUnder, justOver := rateAt(11*time.Hour+59*time.Minute), rateAt(12*time.Hour+time.Minute)
+	if diff := math.Abs(justUnder - justOver); diff > 0.05 {
+		t.Errorf("rate jumped %v%%/h across the 12h floor (%v -> %v); it must be continuous",
+			diff, justUnder, justOver)
+	}
+}
+
+// The live model guards a negative rate; the sustained model computes the same
+// (current - anchor) / span shape and must guard it too, or a source revising a
+// percentage downward publishes a negative percent_at_reset over --json.
+func TestProjectSustainedNeverReportsANegativeRate(t *testing.T) {
+	now := time.Now()
+	window := Window{Key: "weekly_all", Percent: 5, Length: 168 * time.Hour,
+		ResetsAt: now.Add(68 * time.Hour)} // 100h elapsed since the window opened
+	history := loadHistory("")
+	history.Add("claude/weekly_all", now.Add(-100*time.Hour), 0)
+	history.Add("claude/weekly_all", now.Add(-50*time.Hour), 20) // anchor above the current reading
+	projection := history.Project("claude", window, now)
+	if projection.Valid && projection.RatePerHour < 0 {
+		t.Errorf("rate = %v%%/h, want no negative rate on a valid projection", projection.RatePerHour)
+	}
+	if projection.Valid && projection.AtReset < 0 {
+		t.Errorf("at reset = %v%%, want no negative projected percentage", projection.AtReset)
 	}
 }
 

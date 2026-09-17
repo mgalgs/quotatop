@@ -306,13 +306,11 @@ const (
 // so it is correct on a machine with an empty history file.
 //
 // It applies only to long windows (Length >= 24h) with a known reset
-// deadline, and only while we are still inside that window. The denominator
-// needs at least 12h of elapsed time or the projection explodes; that floor
-// is checked against the window's own elapsed time, not just the elapsed
-// activity, so a window that has genuinely been open long enough keeps the
-// sustained model (measured from its own open) even when activity itself
-// only began recently — only a window that is *itself* still young falls
-// through to the live slope below.
+// deadline, and only while we are still inside that window. A window that is
+// itself younger than 12h falls through to the live slope below, since there
+// is not yet enough of it to average. Past that the denominator is floored at
+// 12h rather than the anchor's own age, so a freshly dated anchor cannot
+// explode the projection and the reading stays continuous as it ages.
 func (h *History) sustainedRate(identity string, window Window, now time.Time) (float64, bool) {
 	if window.Length < sustainedMinLength {
 		return 0, false // short windows keep the live model
@@ -347,19 +345,24 @@ func (h *History) sustainedRate(identity string, window Window, now time.Time) (
 			sawZero = false
 		}
 	}
+	if windowElapsed < sustainedMinElapsed {
+		return 0, false // the window itself is too young; fall back to the live slope
+	}
 	activityElapsed := now.Sub(activityStart)
 	if activityElapsed < sustainedMinElapsed {
-		if windowElapsed < sustainedMinElapsed {
-			return 0, false // window itself is too young too; fall back to the live slope
-		}
-		// Activity was only dated recently, but the window has been open
-		// long enough on its own — measure the whole window from its own
-		// open (pct 0) instead of abandoning the sustained model.
-		activityStart = windowStart
-		anchorPct = 0
-		activityElapsed = windowElapsed
+		// Floor the denominator rather than re-anchor to the window's open:
+		// re-anchoring jumps discontinuously as the anchor ages past this
+		// floor, and the pre-jump side is the dilution this function removes.
+		activityElapsed = sustainedMinElapsed
 	}
-	return (window.Percent - anchorPct) / activityElapsed.Hours(), true
+	rate := (window.Percent - anchorPct) / activityElapsed.Hours()
+	if rate < 0 || math.IsNaN(rate) || math.IsInf(rate, 0) {
+		// Mirrors the live model's guard below. The anchor's percentage can
+		// exceed the current reading if a source revises one downward, and a
+		// negative rate reaches --json as a negative percent_at_reset.
+		return 0, false
+	}
+	return rate, true
 }
 
 // finishProjection extends a rate out to the reset and, if the pace reaches
