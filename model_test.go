@@ -35,6 +35,58 @@ func TestQuestionMarkTogglesHelp(t *testing.T) {
 	}
 }
 
+// l advances the layout one step and wraps at the end: full → compact →
+// vertical → full. The zero-value model starts on the default, full.
+func TestLayoutKeyCyclesAndWraps(t *testing.T) {
+	isolateAccountEnv(t)
+	m := newModel(time.Second, loadHistory(""))
+	for i, want := range []string{layoutCompact, layoutVertical, layoutFull, layoutCompact} {
+		updated, cmd := m.Update(key("l"))
+		m = updated.(model)
+		if cmd != nil {
+			t.Errorf("press %d: l produced a command, want none (no fetch is started)", i)
+		}
+		if got := m.layoutName(); got != want {
+			t.Fatalf("press %d: layout = %q, want %q (cycle full → compact → vertical → full)", i, got, want)
+		}
+	}
+}
+
+// The footer must name the layout the user just switched to, and hint at the
+// key; the default stays unannounced so full's footer keeps today's content.
+func TestFooterNamesTheCurrentLayout(t *testing.T) {
+	isolateAccountEnv(t)
+	now := time.Now()
+	m := newModel(time.Second, loadHistory(""))
+	m.now, m.sources = now, gridSources(now, 1)
+
+	footer := m.footerLine(100)
+	if !strings.Contains(footer, "layout") {
+		t.Errorf("footer has no hint for the l key: %q", footer)
+	}
+	if strings.Contains(footer, " full") {
+		t.Errorf("footer shows the default layout's name, want it hidden: %q", footer)
+	}
+	m.layout = layoutCompact
+	if footer = m.footerLine(100); !strings.Contains(footer, "compact") {
+		t.Errorf("footer does not name the current layout: %q", footer)
+	}
+	m.layout = layoutVertical
+	if footer = m.footerLine(100); !strings.Contains(footer, "vertical") {
+		t.Errorf("footer does not name the current layout: %q", footer)
+	}
+}
+
+func TestHelpBodyListsTheLayoutKey(t *testing.T) {
+	isolateAccountEnv(t)
+	m := newModel(time.Second, loadHistory(""))
+	m.now = time.Now()
+	body := m.helpBody(100)
+	if !strings.Contains(body, "cycle layout: full, compact, vertical") {
+		t.Errorf("help body is missing the l key: %s", body)
+	}
+}
+
 // The model starts in the loading state because Init fires both fetches. A tick
 // arriving before those land must not start a second pair.
 func TestPollingDoesNotDoubleFetch(t *testing.T) {

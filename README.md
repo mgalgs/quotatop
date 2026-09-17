@@ -38,6 +38,7 @@ Give it its own tmux window and leave it there.
 |-----|------|
 | `r` | refresh all sources now |
 | `R` | refresh Claude past its 10-minute cache (a real API call) |
+| `l` | cycle layout: full, compact, vertical |
 | `?` | toggle the key list and data-source notes |
 | `q` / `esc` / `ctrl-c` | quit |
 
@@ -47,6 +48,8 @@ Give it its own tmux window and leave it there.
 | `--snapshot` | render one frame to stdout and exit — no TUI |
 | `--json` | write one JSON document to stdout and exit — no TUI |
 | `--width N` | width for `--snapshot` (0 detects the terminal, falls back to the widest layout) |
+| `--height N` | height for `--snapshot` (0 = no height limit) |
+| `--layout NAME` | layout for `--snapshot`: `full`, `compact` or `vertical` (default `full`) |
 | `--fresh` | bypass the Claude cache on the first read |
 | `--no-history` | do not read or write the trend file |
 

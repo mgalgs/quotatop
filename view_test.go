@@ -42,6 +42,33 @@ func TestBoxIsRectangular(t *testing.T) {
 	}
 }
 
+// --layout accepts the known names, defaults the empty string to full, and
+// rejects a typo with a message that names the bad value and the valid set --
+// a typo in a test must fail loudly, not fall back.
+func TestParseLayout(t *testing.T) {
+	for _, name := range []string{"", layoutFull, layoutCompact, layoutVertical} {
+		want := name
+		if want == "" {
+			want = layoutFull
+		}
+		got, err := parseLayout(name)
+		if err != nil {
+			t.Errorf("parseLayout(%q) error = %v, want nil", name, err)
+		} else if got != want {
+			t.Errorf("parseLayout(%q) = %q, want %q", name, got, want)
+		}
+	}
+	for _, name := range []string{"grid", "Full", "COMPACT", "full "} {
+		if got, err := parseLayout(name); err == nil {
+			t.Errorf("parseLayout(%q) = %q, want an error", name, got)
+		} else if !strings.Contains(err.Error(), `"`+name+`"`) {
+			t.Errorf("parseLayout(%q) error = %v, want the offending name quoted", name, err)
+		} else if !strings.Contains(err.Error(), "full, compact, vertical") {
+			t.Errorf("parseLayout(%q) error = %v, want the valid names listed", name, err)
+		}
+	}
+}
+
 func demoSnapshot(now time.Time) *Snapshot {
 	return &Snapshot{
 		Source: "claude", Title: "CLAUDE", Verb: "fetched", Footnote: "account · cache ≤10m",
@@ -200,7 +227,7 @@ func TestViewFitsTerminalWidth(t *testing.T) {
 
 func TestGridColumnsAndRowWidthsMatchOldTwoPanelLadder(t *testing.T) {
 	for _, width := range []int{94, 132} {
-		if cols := gridColumns(width, 2); cols != 2 {
+		if cols := gridColumns(width, 2, minPanel); cols != 2 {
 			t.Errorf("gridColumns(%d, 2) = %d, want 2", width, cols)
 		}
 		half := (width - panelGap) / 2
@@ -212,7 +239,7 @@ func TestGridColumnsAndRowWidthsMatchOldTwoPanelLadder(t *testing.T) {
 	}
 
 	width := 60
-	if cols := gridColumns(width, 2); cols != 1 {
+	if cols := gridColumns(width, 2, minPanel); cols != 1 {
 		t.Errorf("gridColumns(%d, 2) = %d, want 1", width, cols)
 	}
 	widths := rowWidths(width, 1)
@@ -234,6 +261,209 @@ func gridSources(now time.Time, n int) []sourceState {
 	return sources
 }
 
+// threeWindowSources builds n sources, each with the three windows a Claude
+// account has, carrying distinct percentages so a test can assert every
+// window's reading survived a layout.
+func threeWindowSources(now time.Time, n int) []sourceState {
+	perSource := [][3]float64{{7, 33, 58}, {12, 45, 61}, {3, 24, 77}, {18, 40, 66}, {26, 52, 81}}
+	labels := []string{"5-hour", "Weekly", "Weekly · Fable"}
+	sources := make([]sourceState, n)
+	for i := range sources {
+		windows := make([]Window, 3)
+		for j := range windows {
+			windows[j] = Window{Key: fmt.Sprintf("w%d", j), Label: labels[j],
+				Percent: perSource[i%len(perSource)][j], ResetsAt: now.Add(24 * time.Hour)}
+		}
+		sources[i] = sourceState{snap: &Snapshot{Source: "claude", Title: fmt.Sprintf("S%d", i),
+			Observed: now, Windows: windows}}
+	}
+	return sources
+}
+
+// The invariants every layout must hold at any size: at most m.height lines
+// (when height > 0), and no line wider than the terminal. These are checked
+// across a table of sizes rather than one magic geometry: the invariant is
+// what matters, and a test that only checks 80x24 passes while the layout
+// breaks at 81x25.
+func TestViewFitsHeightAndWidthInEveryLayout(t *testing.T) {
+	now := time.Now()
+	for _, layout := range layouts {
+		for _, count := range []int{3, 5} {
+			for _, help := range []bool{false, true} {
+				for _, size := range []struct{ width, height int }{
+					{80, 24}, {96, 30}, {100, 28}, {120, 40}, {132, 50},
+					{60, 24}, {132, 24}, {132, 10}, {100, 8}, {80, 1},
+				} {
+					m := newModel(20*time.Second, loadHistory(""))
+					m.width, m.height, m.now, m.layout, m.showHelp = size.width, size.height, now, layout, help
+					m.sources = threeWindowSources(now, count)
+					lines := strings.Split(m.View(), "\n")
+					if len(lines) > size.height {
+						t.Errorf("layout %s, %d sources, %dx%d: %d lines, want at most %d",
+							layout, count, size.width, size.height, len(lines), size.height)
+					}
+					for i, line := range lines {
+						if got := lipgloss.Width(line); got > size.width {
+							t.Errorf("layout %s, %d sources, %dx%d: line %d is %d cells wide, want at most %d: %q",
+								layout, count, size.width, size.height, i, got, size.width, line)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// A terminal shorter than the content must be met with truncation and a
+// visible marker on the last retained line -- not overflow, and not silence.
+func TestViewTruncatesWithMarkerWhenTallerThanTerminal(t *testing.T) {
+	now := time.Now()
+	m := newModel(20*time.Second, loadHistory(""))
+	m.width, m.now = 80, now
+	m.sources = threeWindowSources(now, 3)
+
+	// The unclamped full view of three stacked three-window panels is far
+	// taller than 10 rows, so a height of 10 must cut it and say so.
+	m.height = 10
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) > 10 {
+		t.Fatalf("height 10 rendered %d lines, want at most 10", len(lines))
+	}
+	if !strings.Contains(lines[len(lines)-1], truncationMarker) {
+		t.Errorf("last line = %q, want the truncation marker", lines[len(lines)-1])
+	}
+	if got := lipgloss.Width(lines[len(lines)-1]); got > 80 {
+		t.Errorf("marker line is %d cells wide, must not itself push over the width", got)
+	}
+
+	// A tall terminal keeps everything and carries no marker.
+	m.height = 50
+	view := m.View()
+	if strings.Contains(view, truncationMarker) {
+		t.Error("tall terminal render carries a truncation marker, want none")
+	}
+
+	// No reported height keeps today's behaviour: no limit, no marker.
+	m.height = 0
+	view = m.View()
+	if strings.Contains(view, truncationMarker) {
+		t.Error("unheighted render carries a truncation marker, want none")
+	}
+
+	// The degenerate one-row terminal still gets a single line, not a panic.
+	m.height = 1
+	lines = strings.Split(m.View(), "\n")
+	if len(lines) != 1 || !strings.Contains(lines[0], truncationMarker) {
+		t.Errorf("height 1 rendered %d lines %v, want exactly one with the marker", len(lines), lines)
+	}
+}
+
+func TestFitHeight(t *testing.T) {
+	view := strings.Repeat("line\n", 19) + "line" // 20 lines
+
+	if got := fitHeight(view, 0); got != view {
+		t.Error("height 0 must leave the view untouched")
+	}
+	if got := fitHeight(view, -3); got != view {
+		t.Error("negative height must leave the view untouched")
+	}
+	if got := fitHeight(view, 20); got != view {
+		t.Error("an exactly-fitting height must leave the view untouched")
+	}
+	for _, height := range []int{1, 2, 10, 19} {
+		got := strings.Split(fitHeight(view, height), "\n")
+		if len(got) != height {
+			t.Errorf("height %d produced %d lines, want exactly %d", height, len(got), height)
+		}
+		if !strings.Contains(got[len(got)-1], truncationMarker) {
+			t.Errorf("height %d: last line %q, want the marker", height, got[len(got)-1])
+		}
+		if height >= 2 && !strings.Contains(got[height-2], "line") {
+			t.Errorf("height %d: line before the marker is %q, want retained content", height, got[height-2])
+		}
+	}
+	if got := strings.Split(fitHeight(view, 1), "\n"); len(got) != 1 || !strings.Contains(got[0], truncationMarker) {
+		t.Errorf("height 1 = %v, want one marker line", got)
+	}
+}
+
+// The headline of the compact layout: what full renders in 43 rows for three
+// stacked Claude-style panels fits a fresh 24-row terminal at 80 columns, with
+// no truncation, and without losing what the monitor exists to show.
+func TestCompactThreePanelsFitIn24RowsAt80Columns(t *testing.T) {
+	now := time.Now()
+	m := newModel(20*time.Second, loadHistory(""))
+	m.width, m.height, m.now, m.layout = 80, 24, now, layoutCompact
+	m.sources = threeWindowSources(now, 3)
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) > 24 {
+		t.Fatalf("compact at 80x24 rendered %d lines, want at most 24:\n%s", len(lines), view)
+	}
+	if strings.Contains(view, truncationMarker) {
+		t.Errorf("compact at 80x24 fits only by being cut; it must fit on its own:\n%s", view)
+	}
+
+	// Every window's percentage survives the squeeze.
+	for _, pct := range []string{"7%", "33%", "58%", "12%", "45%", "61%", "3%", "24%", "77%"} {
+		if !strings.Contains(view, pct) {
+			t.Errorf("compact view lost %s:\n%s", pct, view)
+		}
+	}
+}
+
+// A compact panel that hides a blocked or erroring account is worse than one
+// that does not fit: both must survive the squeeze, and an expired window
+// still withholds its stale percentage.
+func TestCompactKeepsBlockedAndErrorStates(t *testing.T) {
+	now := time.Now()
+	m := newModel(20*time.Second, loadHistory(""))
+	m.width, m.height, m.now, m.layout = 80, 24, now, layoutCompact
+	m.sources = []sourceState{
+		{snap: &Snapshot{Source: "claude", Title: "S0", Observed: now,
+			Windows:      []Window{{Key: "session", Label: "5-hour", Percent: 10}},
+			LimitReached: "usage_limit_reached"}},
+		{snap: &Snapshot{Source: "codex", Title: "S1", Err: errors.New("endpoint down")}},
+		{snap: &Snapshot{Source: "claude", Title: "S2", Observed: now,
+			Windows: []Window{{Key: "session", Label: "5-hour", Percent: 20, Expired: true}}}},
+	}
+
+	view := m.View()
+	if len(strings.Split(view, "\n")) > 24 {
+		t.Errorf("compact with blocked and error panels overran 24 rows:\n%s", view)
+	}
+	if !strings.Contains(view, "blocked: usage limit reached") {
+		t.Errorf("compact hid a blocked account:\n%s", view)
+	}
+	if !strings.Contains(view, "endpoint down") {
+		t.Errorf("compact hid an error state:\n%s", view)
+	}
+	if strings.Contains(view, "20%") {
+		t.Errorf("compact showed an expired window's stale percentage:\n%s", view)
+	}
+}
+
+// When a reason is too long for a packed panel it truncates -- but the fact
+// of the block must remain, or the compact panel has hidden the one state the
+// monitor exists to surface.
+func TestCompactTruncatesButKeepsBlockedMarker(t *testing.T) {
+	now := time.Now()
+	m := newModel(20*time.Second, loadHistory(""))
+	m.width, m.height, m.now, m.layout = 80, 24, now, layoutCompact
+	m.sources = []sourceState{{snap: &Snapshot{Source: "claude", Title: "S0", Observed: now,
+		Windows:      []Window{{Key: "session", Label: "5-hour", Percent: 10}},
+		LimitReached: strings.Repeat("very_long_reason_code_", 5)}}}
+
+	view := m.View()
+	if len(strings.Split(view, "\n")) > 24 {
+		t.Errorf("compact overran 24 rows with a long block reason:\n%s", view)
+	}
+	if !strings.Contains(view, "blocked:") {
+		t.Errorf("compact lost the block marker under a long reason:\n%s", view)
+	}
+}
+
 // topBorderCounts renders m and returns, for every line that opens a panel
 // row (contains the box's top-left corner), how many panels start on that
 // line -- i.e. the row's panel count, in row order.
@@ -251,6 +481,66 @@ func topBorderCounts(view string) []int {
 // regression in the loop at view.go (e.g. one panel per row) would change
 // what actually gets rendered, and only a test that calls View() can catch
 // that.
+// vertical never packs side by side, no matter how wide the terminal is: the
+// equal-width rule that governs the full grid does not apply here, and this
+// layout exists precisely to leave the grid behind.
+// visualExtent is how many display cells a line's non-space content spans, so
+// a test can measure a panel without counting the centering padding
+// PlaceHorizontal adds out to the terminal width. ANSI escapes are skipped.
+func visualExtent(t *testing.T, line string) int {
+	t.Helper()
+	first, last, cell, inEsc := -1, -1, 0, false
+	for _, r := range line {
+		if r == '\x1b' {
+			inEsc = true
+			continue
+		}
+		if inEsc {
+			inEsc = r != 'm'
+			continue
+		}
+		cell++
+		if r != ' ' {
+			if first < 0 {
+				first = cell
+			}
+			last = cell
+		}
+	}
+	if first < 0 {
+		return 0
+	}
+	return last - first + 1
+}
+
+func TestVerticalIsOnePanelPerRowAtAnyWidth(t *testing.T) {
+	now := time.Now()
+	for _, width := range []int{80, 132, 200} {
+		m := newModel(20*time.Second, loadHistory(""))
+		m.width, m.now, m.layout = width, now, layoutVertical
+		m.sources = gridSources(now, 3)
+		got := topBorderCounts(m.View())
+		want := []int{1, 1, 1}
+		if len(got) != len(want) {
+			t.Fatalf("width %d: row panel counts = %v, want %v", width, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("width %d: row %d has %d panels, want %d (all rows=%v)",
+					width, i, got[i], want[i], got)
+			}
+		}
+		// Centering pads a line with spaces out to the terminal width; the
+		// panel itself -- the line's non-space extent -- must never exceed
+		// maxLayout.
+		for _, line := range strings.Split(m.View(), "\n") {
+			if got := visualExtent(t, line); got > maxLayout {
+				t.Errorf("width %d: panel extent is %d cells, want at most maxLayout (%d)", width, got, maxLayout)
+			}
+		}
+	}
+}
+
 func TestViewRendersThreePanelsAsTwoRows(t *testing.T) {
 	now := time.Now()
 	m := newModel(20*time.Second, loadHistory(""))
@@ -305,7 +595,7 @@ func TestViewTrailingRowStaysUnderFullRowColumn(t *testing.T) {
 	m.width, m.now = 180, now
 	m.sources = gridSources(now, 3)
 
-	cols := gridColumns(maxLayout, 3)
+	cols := gridColumns(maxLayout, 3, minPanel)
 	colWidths := rowWidths(maxLayout, cols)
 
 	var topBorders []string
@@ -360,7 +650,7 @@ func TestViewRendersTwoClaudeAccountsPlusCodexRealistically(t *testing.T) {
 		t.Fatalf("row panel counts = %v, want %v", got, want)
 	}
 
-	cols := gridColumns(maxLayout, 3)
+	cols := gridColumns(maxLayout, 3, minPanel)
 	colWidths := rowWidths(maxLayout, cols)
 
 	var topBorders []string
