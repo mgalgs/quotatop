@@ -519,6 +519,16 @@ func computeCompactColumns(sources []sourceState, minContent int) compactColumns
 	// spare, and does not track gaugeMinPad's own threshold anyway. This is
 	// the same rescue compactWindowLine used to compute per panel, moved
 	// here so every panel shrinks its label column by the same amount.
+	//
+	// This only guards gaugeMinPad, the floor a bar needs to read as a bar at
+	// all. gaugeWithForecast's own fit rule is stricter -- it wants the
+	// forecast text plus gaugeMinRun of untouched bar -- and this rescue does
+	// not weigh it: a bar can clear gaugeMinPad and still be too narrow for
+	// the overlay, which then falls back to plain (gaugeWithForecast). That is
+	// an accepted trade, not an oversight -- uniform bar widths across every
+	// panel on screen and the longest bar the narrowest label would allow
+	// cannot both hold -- but it does mean a wide label elsewhere on screen
+	// can silently cost a narrower panel its forecast overlay.
 	if deficit := gaugeMinPad - (minContent - cols.label - cols.pct - 2); deficit > 0 {
 		cols.label -= deficit
 		if cols.label < 0 {
@@ -546,7 +556,11 @@ func compactRenderPanel(sources []sourceState, minContent int) func(int, *Snapsh
 // percentage (a dash when the window expired), and its bar, which is still
 // the fastest read of which window is red. When the window has a burn
 // projection, the forecast's headline is printed inside the bar itself, the
-// one place a one-line panel has room for it (gaugeWithForecast).
+// one place a one-line panel has room for it (gaugeWithForecast) -- provided
+// the bar is wide enough; cols' shared label and percentage columns (see
+// computeCompactColumns) can leave a narrower panel's bar below what
+// gaugeWithForecast's own fit rule needs, in which case it draws plain, with
+// no signal to the caller that the overlay was dropped.
 //
 // label and pct are padded to cols' widths -- computed once, globally, across
 // every window that will be drawn -- rather than to this window's own text,
@@ -898,6 +912,9 @@ func (m model) View() string {
 		name := m.layoutName()
 		renderPanel, min := panel, minPanel
 		if isCompact(name) {
+			// Compact reuses the grid's packing arithmetic with its own, smaller
+			// floor; the equal-width rule the trailing row obeys is full-grid
+			// guidance, not a constraint this layout needs.
 			min = compactMinPanel
 		}
 		if isStacked(name) {
@@ -921,10 +938,6 @@ func (m model) View() string {
 			// terminal; nothing fills the gap.
 			colWidths := rowWidths(width, cols)
 			if isCompact(name) {
-				// Compact reuses the grid's packing arithmetic with its own, smaller
-				// floor; the equal-width rule the trailing row obeys is full-grid
-				// guidance, not a constraint this layout needs.
-				//
 				// The column widths are computed once here, across every source
 				// that will be drawn, so every bar on screen shares a left and
 				// right edge even across panels -- panelCompact and
