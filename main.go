@@ -326,7 +326,7 @@ func main() {
 	fresh := flag.Bool("fresh", false, "bypass the Claude 10-minute quota cache on the first read")
 	width := flag.Int("width", 0, "width for --snapshot (0 = detect, fall back to the widest layout)")
 	height := flag.Int("height", 0, "height for --snapshot (0 = no height limit)")
-	layout := flag.String("layout", "", "layout for --snapshot: full, compact or vertical (default full)")
+	layout := flag.String("layout", "", "layout for --snapshot: "+strings.Join(layouts, ", ")+" (default full)")
 	theme := flag.Int("theme", 0, "theme index for --snapshot")
 	noHistory := flag.Bool("no-history", false, "do not read or write the trend history file")
 	showVersion := flag.Bool("version", false, "print the version and exit")

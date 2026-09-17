@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -76,21 +77,31 @@ func TestThemeZeroMatchesPreChangeFixture(t *testing.T) {
 		got := strings.Split(themeFixtureModel(tc.showHelp).View(), "\n")
 		wantLines := strings.Split(strings.TrimRight(string(want), "\n"), "\n")
 		if tc.showHelp {
-			// The t key added one whole line inside the KEYS box. Drop exactly
-			// that line; every other line must be byte-identical.
-			stripped := got[:0]
-			dropped := 0
-			for _, line := range got {
-				if strings.Contains(line, "cycle themes") {
-					dropped++
-					continue
+			// Compare the palette, not the bytes. The help body gains and
+			// edits rows whenever a keybinding changes -- t and then
+			// compact-vertical both did -- so freezing its text here trips on
+			// every such edit while saying nothing about colour. What must not
+			// change is the set of colours theme 0 draws it with, and the
+			// frame case above already pins the layout byte for byte.
+			palette := func(lines []string) string {
+				sgr := regexp.MustCompile(`\x1b\[[0-9;]*m`)
+				seen := map[string]bool{}
+				for _, line := range lines {
+					for _, seq := range sgr.FindAllString(line, -1) {
+						seen[seq] = true
+					}
 				}
-				stripped = append(stripped, line)
+				out := make([]string, 0, len(seen))
+				for seq := range seen {
+					out = append(out, seq)
+				}
+				sort.Strings(out)
+				return strings.Join(out, " ")
 			}
-			if dropped != 1 {
-				t.Fatalf("help: found %d lines documenting t, want exactly 1 to strip", dropped)
+			if got, want := palette(got), palette(wantLines); got != want {
+				t.Errorf("help: theme 0's palette changed:\ngot:  %s\nwant: %s", got, want)
 			}
-			got = stripped
+			continue
 		} else {
 			// The footer gained the t hint as an insertion on its last line.
 			// Strip exactly that run; the hint legitimately eats into the

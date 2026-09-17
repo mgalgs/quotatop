@@ -46,7 +46,7 @@ func TestBoxIsRectangular(t *testing.T) {
 // rejects a typo with a message that names the bad value and the valid set --
 // a typo in a test must fail loudly, not fall back.
 func TestParseLayout(t *testing.T) {
-	for _, name := range []string{"", layoutFull, layoutCompact, layoutVertical} {
+	for _, name := range append([]string{""}, layouts...) {
 		want := name
 		if want == "" {
 			want = layoutFull

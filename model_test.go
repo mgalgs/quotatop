@@ -35,19 +35,27 @@ func TestQuestionMarkTogglesHelp(t *testing.T) {
 	}
 }
 
-// l advances the layout one step and wraps at the end: full → compact →
-// vertical → full. The zero-value model starts on the default, full.
+// l advances the layout one step and wraps at the end. The expected order is
+// derived from layouts rather than written out, so adding a layout extends
+// this test instead of breaking it. The zero-value model starts on the
+// default, layouts[0].
 func TestLayoutKeyCyclesAndWraps(t *testing.T) {
 	isolateAccountEnv(t)
 	m := newModel(time.Second, loadHistory(""))
-	for i, want := range []string{layoutCompact, layoutVertical, layoutFull, layoutCompact} {
+	// Two full laps plus one, so the wrap is exercised rather than assumed.
+	var order []string
+	for lap := 0; lap < 2; lap++ {
+		order = append(order, layouts[1:]...)
+		order = append(order, layouts[0])
+	}
+	for i, want := range order {
 		updated, cmd := m.Update(key("l"))
 		m = updated.(model)
 		if cmd != nil {
 			t.Errorf("press %d: l produced a command, want none (no fetch is started)", i)
 		}
 		if got := m.layoutName(); got != want {
-			t.Fatalf("press %d: layout = %q, want %q (cycle full → compact → vertical → full)", i, got, want)
+			t.Fatalf("press %d: layout = %q, want %q (cycling %v)", i, got, want, layouts)
 		}
 	}
 }
@@ -101,7 +109,7 @@ func TestHelpBodyListsTheLayoutKey(t *testing.T) {
 	m := newModel(time.Second, loadHistory(""))
 	m.now = time.Now()
 	body := m.helpBody(100)
-	if !strings.Contains(body, "cycle layout: full, compact, vertical") {
+	if !strings.Contains(body, "cycle layout: "+strings.Join(layouts, ", ")) {
 		t.Errorf("help body is missing the l key: %s", body)
 	}
 }

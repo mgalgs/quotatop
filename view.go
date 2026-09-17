@@ -25,13 +25,29 @@ const (
 
 // Layout names: what --layout accepts, what the l key will cycle, and what the
 // footer will show when the user has switched off the default.
+// A layout is two independent choices: which panel renderer draws a source
+// (panel or panelCompact) and how the panels are arranged (grid or one per
+// row). The four names are the four combinations; View reads the two
+// dimensions separately rather than branching per name.
 const (
-	layoutFull     = "full"
-	layoutCompact  = "compact"
-	layoutVertical = "vertical"
+	layoutFull            = "full"
+	layoutCompact         = "compact"
+	layoutVertical        = "vertical"
+	layoutCompactVertical = "compact-vertical"
 )
 
-var layouts = []string{layoutFull, layoutCompact, layoutVertical}
+var layouts = []string{layoutFull, layoutCompact, layoutVertical, layoutCompactVertical}
+
+// isCompact reports whether a layout draws its panels with panelCompact.
+func isCompact(name string) bool {
+	return name == layoutCompact || name == layoutCompactVertical
+}
+
+// isStacked reports whether a layout puts one panel per row instead of
+// packing a grid.
+func isStacked(name string) bool {
+	return name == layoutVertical || name == layoutCompactVertical
+}
 
 // parseLayout maps a --layout value onto a known layout. The empty string is
 // the default; an unknown name is an error rather than a silent fallback, so a
@@ -540,7 +556,7 @@ func (m model) helpBody(width int) string {
 	rows := [][2]string{
 		{"r", "refresh all sources now"},
 		{"R", "refresh Claude past its 10-minute cache (hits the API)"},
-		{"l", "cycle layout: full, compact, vertical"},
+		{"l", "cycle layout: " + strings.Join(layouts, ", ")},
 		{"t", "cycle themes"},
 		{"?", "toggle this help"},
 		{"q / esc / ctrl-c", "quit"},
@@ -684,23 +700,23 @@ func (m model) View() string {
 
 	var rows []string
 	if n := len(m.sources); n > 0 {
-		if m.layoutName() == layoutVertical {
+		name := m.layoutName()
+		renderPanel, min := panel, minPanel
+		if isCompact(name) {
+			// Compact reuses the grid's packing arithmetic with its own, smaller
+			// floor; the equal-width rule the trailing row obeys is full-grid
+			// guidance, not a constraint this layout needs.
+			renderPanel, min = panelCompact, compactMinPanel
+		}
+		if isStacked(name) {
 			// One panel per row, at any width: no grid, no side-by-side packing.
 			// The width still clamps to maxLayout like everything else -- a
 			// panel stretched across a very wide terminal reads badly -- but it
 			// is never split. This layout is about stacking, not filling.
 			for _, source := range m.sources {
-				rows = append(rows, panel(width, source.snap, m.history, m.now, source.loading))
+				rows = append(rows, renderPanel(width, source.snap, m.history, m.now, source.loading))
 			}
 		} else {
-			renderPanel := panel
-			min := minPanel
-			if m.layoutName() == layoutCompact {
-				// Compact reuses the grid's packing arithmetic with its own, smaller
-				// floor; the equal-width rule the trailing row obeys is full-grid
-				// guidance, not a constraint this layout needs.
-				renderPanel, min = panelCompact, compactMinPanel
-			}
 			cols := gridColumns(width, n, min)
 			// Sized once for a full row of cols panels: a short trailing row (the
 			// last row of an n not divisible by cols) gets the same per-panel
