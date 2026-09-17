@@ -179,7 +179,8 @@ var themes = []theme{
 // every launch and is not persisted: the choice lasts as long as the process.
 //
 // Safety invariant: themeIndex may only be written from model.Update (the t
-// key) and read from View() and its helpers, plus once from newModel at
+// key) and from renderSnapshot (the --theme flag, after which the process
+// exits), and read from View() and its helpers, plus once from newModel at
 // construction, before any Update has run. That is safe because rendering is
 // single-goroutine: Bubble Tea runs Update and View on the same goroutine and
 // nothing inside a tea.Cmd touches a style, and there are no t.Parallel()

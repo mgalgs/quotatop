@@ -215,6 +215,14 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			// is no layout menu, and the choice is not persisted across runs.
 			m.cycleLayout()
 			return m, nil
+		case "t":
+			// Cycle themes, wrapping at the end. Like the layout: one key,
+			// cycle, wrap; not persisted, and the current theme is never
+			// named in the UI. The spinner is styled from the theme too, so it
+			// follows the switch.
+			cycleTheme()
+			m.spinner.Style = currentTheme().key
+			return m, nil
 		case "?":
 			m.showHelp = !m.showHelp
 			return m, nil
@@ -291,7 +299,7 @@ const usageText = `quotatop -- live Claude and Codex quota in one window.
 
 Usage: quotatop [options]
 
-Keys:  r refresh · R refresh Claude past its cache · l layout · ? keys · q quit
+Keys:  r refresh · R refresh Claude past its cache · l layout · t themes · ? keys · q quit
 
 Options:
 `
@@ -314,6 +322,7 @@ func main() {
 	width := flag.Int("width", 0, "width for --snapshot (0 = detect, fall back to the widest layout)")
 	height := flag.Int("height", 0, "height for --snapshot (0 = no height limit)")
 	layout := flag.String("layout", "", "layout for --snapshot: full, compact or vertical (default full)")
+	theme := flag.Int("theme", 0, "theme index for --snapshot")
 	noHistory := flag.Bool("no-history", false, "do not read or write the trend history file")
 	flag.Parse()
 	if flag.NArg() > 0 {
@@ -341,7 +350,7 @@ func main() {
 	m := newModel(*interval, loadHistory(path))
 
 	if *snapshot {
-		os.Exit(renderSnapshot(m, *width, *height, *layout, *fresh))
+		os.Exit(renderSnapshot(m, *width, *height, *layout, *theme, *fresh))
 	}
 
 	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
@@ -389,10 +398,14 @@ func recordJSONSnapshots(history *History, snaps []Snapshot, record bool) {
 
 // renderSnapshot prints a single frame. Handy for a quick non-interactive look,
 // and it is how the layout is checked without driving a terminal.
-func renderSnapshot(m model, width, height int, layout string, fresh bool) int {
+func renderSnapshot(m model, width, height int, layout string, themeIdx int, fresh bool) int {
 	name, err := parseLayout(layout)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "quotatop:", err)
+		return 2
+	}
+	if themeIdx < 0 || themeIdx >= len(themes) {
+		fmt.Fprintf(os.Stderr, "quotatop: theme index %d out of range (0-%d)\n", themeIdx, len(themes)-1)
 		return 2
 	}
 	if os.Getenv("NO_COLOR") != "" {
@@ -411,6 +424,12 @@ func renderSnapshot(m model, width, height int, layout string, fresh bool) int {
 	m.height = height // 0 means no limit: a piped --snapshot keeps today's unclamped output
 	m.layout = name
 	m.now = time.Now()
+	// --theme points the current theme at the requested scheme for this one
+	// frame and restores it on return. Like the t key, this is a write from
+	// the program's single goroutine before the frame is rendered.
+	prevTheme := themeIndex
+	themeIndex = themeIdx
+	defer func() { themeIndex = prevTheme }()
 
 	failed := false
 	for i := range m.sources {

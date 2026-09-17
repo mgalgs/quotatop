@@ -509,7 +509,7 @@ func (m model) tightest() (string, float64, bool) {
 
 func (m model) footerLine(width int) string {
 	keys := []struct{ key, label string }{
-		{"r", "refresh"}, {"R", "force-fresh"}, {"l", "layout"}, {"?", "keys"}, {"q", "quit"},
+		{"r", "refresh"}, {"R", "force-fresh"}, {"l", "layout"}, {"t", "themes"}, {"?", "keys"}, {"q", "quit"},
 	}
 	parts := make([]string, 0, len(keys))
 	for _, entry := range keys {
@@ -541,6 +541,7 @@ func (m model) helpBody(width int) string {
 		{"r", "refresh all sources now"},
 		{"R", "refresh Claude past its 10-minute cache (hits the API)"},
 		{"l", "cycle layout: full, compact, vertical"},
+		{"t", "cycle themes"},
 		{"?", "toggle this help"},
 		{"q / esc / ctrl-c", "quit"},
 	}

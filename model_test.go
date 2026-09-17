@@ -52,6 +52,25 @@ func TestLayoutKeyCyclesAndWraps(t *testing.T) {
 	}
 }
 
+// t advances the theme one step and wraps at the end: pressing it
+// len(themes) times lands back where it started, and like l it starts no
+// fetch.
+func TestThemeKeyCyclesAndWraps(t *testing.T) {
+	isolateAccountEnv(t)
+	defer func(prev int) { themeIndex = prev }(themeIndex)
+	m := newModel(time.Second, loadHistory(""))
+	for i := 1; i <= len(themes); i++ {
+		updated, cmd := m.Update(key("t"))
+		m = updated.(model)
+		if cmd != nil {
+			t.Errorf("press %d: t produced a command, want none (no fetch is started)", i)
+		}
+		if themeIndex != i%len(themes) {
+			t.Fatalf("press %d: themeIndex = %d, want %d (cycle wraps at the end)", i, themeIndex, i%len(themes))
+		}
+	}
+}
+
 // The footer must name the layout the user just switched to, and hint at the
 // key; the default stays unannounced so full's footer keeps today's content.
 func TestFooterNamesTheCurrentLayout(t *testing.T) {

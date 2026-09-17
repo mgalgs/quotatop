@@ -2,13 +2,17 @@ package main
 
 import (
 	"errors"
+	"fmt"
 	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
+	"os/exec"
 )
 
 // themeFixtureModel builds a model whose rendering depends on neither the
@@ -47,10 +51,13 @@ func forcedColour(t *testing.T) {
 	t.Cleanup(func() { lipgloss.SetColorProfile(prev) })
 }
 
-// The fixtures in testdata/themes/ were captured from the pre-theme code with
-// the same construction as here. Theme 0 carries exactly the old values, so
+// The fixtures in testdata/themes/ were captured from the pre-theme code with the
+// same construction as here. Theme 0 carries exactly the old values, so
 // rendering with it must reproduce them byte for byte: if this test fails,
-// the refactor changed output it was not supposed to touch.
+// the refactor changed output it was not supposed to touch. The t key's
+// footer hint and help line were added afterwards; they are the one
+// deliberate difference, and this test asserts everything else is still
+// byte-identical.
 func TestThemeZeroMatchesPreChangeFixture(t *testing.T) {
 	isolateAccountEnv(t)
 	forcedColour(t)
@@ -66,9 +73,49 @@ func TestThemeZeroMatchesPreChangeFixture(t *testing.T) {
 		if err != nil {
 			t.Fatalf("reading %s: %v", tc.file, err)
 		}
-		if got := themeFixtureModel(tc.showHelp).View(); got != strings.TrimRight(string(want), "\n") {
-			t.Errorf("%s: theme-0 render differs from the pre-change fixture:\ngot:\n%s\nwant:\n%s",
-				tc.name, got, strings.TrimRight(string(want), "\n"))
+		got := strings.Split(themeFixtureModel(tc.showHelp).View(), "\n")
+		wantLines := strings.Split(strings.TrimRight(string(want), "\n"), "\n")
+		if tc.showHelp {
+			// The t key added one whole line inside the KEYS box. Drop exactly
+			// that line; every other line must be byte-identical.
+			stripped := got[:0]
+			dropped := 0
+			for _, line := range got {
+				if strings.Contains(line, "cycle themes") {
+					dropped++
+					continue
+				}
+				stripped = append(stripped, line)
+			}
+			if dropped != 1 {
+				t.Fatalf("help: found %d lines documenting t, want exactly 1 to strip", dropped)
+			}
+			got = stripped
+		} else {
+			// The footer gained the t hint as an insertion on its last line.
+			// Strip exactly that run; the hint legitimately eats into the
+			// footer's gap padding, so the last line is compared with space
+			// runs collapsed.
+			snip := currentTheme().dim.Render(" · ") +
+				currentTheme().key.Render("t") + currentTheme().dim.Render(" themes")
+			if n := strings.Count(got[len(got)-1], snip); n != 1 {
+				t.Fatalf("frame: found %d copies of the t footer hint, want exactly 1", n)
+			}
+			got[len(got)-1] = strings.Replace(got[len(got)-1], snip, "", 1)
+		}
+		if len(got) != len(wantLines) {
+			t.Fatalf("%s: %d lines, fixture has %d", tc.name, len(got), len(wantLines))
+		}
+		for i := range wantLines {
+			if tc.showHelp || i < len(wantLines)-1 {
+				if got[i] != wantLines[i] {
+					t.Errorf("%s: line %d differs from the pre-change fixture:\ngot:  %q\nwant: %q", tc.name, i, got[i], wantLines[i])
+				}
+				continue
+			}
+			if reGap := regexp.MustCompile(` {2,}`); reGap.ReplaceAllString(got[i], " ") != reGap.ReplaceAllString(wantLines[i], " ") {
+				t.Errorf("%s: footer differs from the pre-change fixture beyond the t hint:\ngot:  %q\nwant: %q", tc.name, got[i], wantLines[i])
+			}
 		}
 	}
 }
@@ -130,5 +177,114 @@ func TestEveryThemeDiffersFromThemeZero(t *testing.T) {
 		if got := themeFixtureModel(false).View(); got == baseline {
 			t.Errorf("theme %d (%s) renders identically to theme 0", i, themes[i].name)
 		}
+	}
+}
+
+// ansiStrip removes SGR escape sequences so styled output can be compared on
+// its plain content.
+var ansiRe = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+
+func ansiStrip(s string) string { return ansiRe.ReplaceAllString(s, "") }
+
+// reClock masks the header's wall clock, the one part of the fixture render
+// that moves between two --snapshot calls taken a moment apart.
+var reClock = regexp.MustCompile(`\w+ \d{1,2}:\d{2}:\d{2} [AP]M`)
+
+func plainFrame(s string) string { return reClock.ReplaceAllString(ansiStrip(s), "TIME") }
+
+// The footer and the ? help name the key but not any theme: cycling is
+// announced, the current scheme is not.
+func TestFooterAndHelpHintAtThemeKey(t *testing.T) {
+	isolateAccountEnv(t)
+	if plain := ansiStrip(themeFixtureModel(false).View()); !strings.Contains(plain, "t themes") {
+		t.Errorf("footer does not hint that t cycles themes: %q", plain)
+	}
+	if plain := ansiStrip(themeFixtureModel(true).View()); !strings.Contains(plain, "cycle themes") {
+		t.Error("help body does not document that t cycles themes")
+	}
+	for _, showHelp := range []bool{false, true} {
+		view := ansiStrip(themeFixtureModel(showHelp).View())
+		for _, th := range themes {
+			if strings.Contains(view, th.name) {
+				t.Errorf("render names the theme %q, want no theme name displayed", th.name)
+			}
+		}
+	}
+}
+
+// Pressing t len(themes) times renders byte-identically to never having
+// pressed it at all: the cycle wraps back to the start.
+func TestCyclingAllThemesRendersSameAsStart(t *testing.T) {
+	isolateAccountEnv(t)
+	forcedColour(t)
+	m := themeFixtureModel(false)
+	first := m.View()
+	for i := 0; i < len(themes); i++ {
+		updated, cmd := m.Update(key("t"))
+		if cmd != nil {
+			t.Fatalf("press %d: t produced a command, want none", i)
+		}
+		m = updated.(model)
+	}
+	if got := m.View(); got != first {
+		t.Errorf("after %d presses of t, render differs from the start:\ngot:\n%s\nwant:\n%s",
+			len(themes), got, first)
+	}
+}
+
+// --theme is a test instrument for --snapshot: a valid index renders the
+// requested scheme (different colouring, identical plain content), and an
+// out-of-range index fails loudly rather than clamping or wrapping.
+func TestRenderSnapshotHonoursThemeFlag(t *testing.T) {
+	isolateAccountEnv(t)
+	t.Setenv("NO_COLOR", "")
+	t.Setenv("CLICOLOR_FORCE", "1")
+	render := func(themeIdx int) (string, string, int) {
+		var code int
+		stdout, stderr := captureStdout(t, func() {
+			code = renderSnapshot(themeFixtureModel(false), 132, 0, "", themeIdx, false)
+		})
+		return stdout, stderr, code
+	}
+	out0, _, code0 := render(0)
+	if code0 != 1 {
+		t.Fatalf("theme 0 exit code = %d, want 1 (the fixture's codex source fails by design; 2 would be a theme error)", code0)
+	}
+	out4, _, code4 := render(4)
+	if code4 != 1 {
+		t.Fatalf("theme 4 exit code = %d, want 1 (same as theme 0: fetch failed, theme fine)", code4)
+	}
+	if plainFrame(out0) != plainFrame(out4) {
+		t.Error("theme flag changed rendered content, want colour only")
+	}
+	if strings.TrimRight(out0, "\n") == strings.TrimRight(out4, "\n") {
+		t.Error("theme 4 rendered byte-identically to theme 0, want different colouring")
+	}
+	for _, idx := range []int{-1, len(themes)} {
+		_, stderr, code := render(idx)
+		if code == 0 {
+			t.Errorf("exit code = 0 for theme index %d, want non-zero", idx)
+			continue
+		}
+		if !strings.Contains(stderr, fmt.Sprintf("theme index %d out of range (0-%d)", idx, len(themes)-1)) {
+			t.Errorf("stderr = %q, want the out-of-range error naming %d", stderr, idx)
+		}
+	}
+}
+
+// End to end: the built binary exits non-zero on --snapshot --theme out of
+// range, the same way a test that asks for a theme that does not exist must
+// fail loudly.
+func TestSnapshotFlagRejectsOutOfRangeTheme(t *testing.T) {
+	bin := filepath.Join(t.TempDir(), "quotatop")
+	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
+		t.Fatalf("go build: %v\n%s", err, out)
+	}
+	out, err := exec.Command(bin, "--snapshot", "--theme", fmt.Sprint(len(themes)), "--no-history").CombinedOutput()
+	if err == nil {
+		t.Fatalf("exit = 0 for out-of-range --theme, want non-zero\n%s", out)
+	}
+	if !strings.Contains(string(out), fmt.Sprintf("theme index %d out of range (0-%d)", len(themes), len(themes)-1)) {
+		t.Errorf("output = %q, want the out-of-range error", out)
 	}
 }
