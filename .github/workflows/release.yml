@@ -1,0 +1,65 @@
+---
+name: Release
+
+# Cutting a release is meant to be one command and no ceremony:
+#
+#     git tag -a v0.1.0 -m "v0.1.0" && git push origin v0.1.0
+#
+# Everything below is what that tag sets off. Nothing here runs on an
+# ordinary push, so the cost of having it is zero until a tag exists.
+"on":
+  push:
+    tags: ["v*"]
+
+# Higher than CI's contents:read, and only because creating the release and
+# uploading its assets is a write. Nothing else in this file needs it.
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      # The suite runs again here rather than trusting the CI run on the same
+      # commit: a tag can be pushed to any commit, including one CI never saw,
+      # and a published binary is not something to take back.
+      - name: test
+        run: go test ./...
+
+      # Linux only, deliberately. The tool reads ~/.claude/.credentials.json,
+      # which is where credentials live on Linux and is NOT where macOS keeps
+      # them -- the README says so and invites a PR. CI cross-compiles darwin
+      # so a contributor finds a tree that already builds, but shipping a mac
+      # binary here would advertise support that does not exist. Anyone on
+      # another platform builds from source.
+      - name: build
+        run: |
+          mkdir -p dist
+          for target in linux/amd64 linux/arm64; do
+            export GOOS="${target%/*}" GOARCH="${target#*/}"
+            out="quotatop-${GITHUB_REF_NAME}-${GOOS}-${GOARCH}"
+            echo "building $out"
+            # -trimpath so the binary does not embed this runner's paths;
+            # -s -w drops the symbol and DWARF tables, which is most of the
+            # download size and nothing a user of a CLI needs.
+            go build -trimpath -ldflags "-s -w" -o "dist/${out}" .
+            (cd dist && sha256sum "$out" >> checksums.txt)
+          done
+
+      # gh is preinstalled on the runner, so this needs no third-party action.
+      # That is the point: a release workflow on a public repo is a supply
+      # chain, and the smallest one that works is the right one.
+      # --generate-notes builds the changelog from the commits since the last
+      # tag, so cutting a release stays a single command with no changelog to
+      # hand-write.
+      - name: release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --generate-notes
