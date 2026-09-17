@@ -39,19 +39,20 @@ func windowExpired(length time.Duration, observed, now time.Time) bool {
 
 // Snapshot is everything one source knows right now.
 type Snapshot struct {
-	Source       string // "claude" or "codex"
-	Account      string // "" unless multi-account configuration names this source
-	Title        string
-	Chip         string // plan or similar, shown in the panel's top-right
-	Windows      []Window
-	Observed     time.Time // when the data itself was observed, not when we asked
-	Verb         string    // "fetched" / "reported"
-	Footnote     string
-	Detail       string
-	Warning      string // panel-level caution, shown once under the windows
-	LimitReached string // reason the account is refusing work, "" when not blocked
-	Err          error
-	At           time.Time // when this snapshot was produced
+	Source          string // "claude" or "codex"
+	Account         string // "" unless multi-account configuration names this source
+	CredentialsPath string // absolute path to the credentials file, "" when the source has none
+	Title           string
+	Chip            string // plan or similar, shown in the panel's top-right
+	Windows         []Window
+	Observed        time.Time // when the data itself was observed, not when we asked
+	Verb            string    // "fetched" / "reported"
+	Footnote        string
+	Detail          string
+	Warning         string // panel-level caution, shown once under the windows
+	LimitReached    string // reason the account is refusing work, "" when not blocked
+	Err             error
+	At              time.Time // when this snapshot was produced
 }
 
 // Identity is the stable id for one source/account pair: the source alone
@@ -290,7 +291,7 @@ func (s claudeSource) writeCache(payload claudePayload, fetchedAt time.Time) {
 }
 
 func (s claudeSource) fetch(fresh bool) Snapshot {
-	snap := Snapshot{Source: "claude", Account: s.account, Title: panelTitle("CLAUDE", s.account), Verb: "fetched", At: time.Now(),
+	snap := Snapshot{Source: "claude", Account: s.account, CredentialsPath: s.credentialsPath, Title: panelTitle("CLAUDE", s.account), Verb: "fetched", At: time.Now(),
 		Footnote: "account · 10m cache"}
 	now := time.Now()
 	if !fresh {
