@@ -191,6 +191,42 @@ func TestEncodeJSONExpiredAndLimitReachedAreOmittedWhenZero(t *testing.T) {
 	}
 }
 
+// Every source object must always carry credentials_path -- no omitempty --
+// even though a Codex source has no single credentials file to report.
+func TestEncodeJSONCredentialsPathAlwaysPresent(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	doc := encodeJSON([]Snapshot{
+		{Source: "claude", CredentialsPath: "/home/user/.claude2/.credentials.json", Windows: []Window{{Key: "session", Percent: 10}}},
+		{Source: "codex", Windows: []Window{{Key: "primary", Percent: 20}}},
+	}, loadHistory(""), now)
+	sources := jsonSources(t, doc)
+	claude := sources[0].(map[string]any)
+	if claude["credentials_path"] != "/home/user/.claude2/.credentials.json" {
+		t.Errorf("claude credentials_path = %#v", claude["credentials_path"])
+	}
+	codex := sources[1].(map[string]any)
+	if codex["credentials_path"] != "" {
+		t.Errorf("codex credentials_path = %#v, want empty string", codex["credentials_path"])
+	}
+}
+
+// A source that failed to fetch must still report its credentials_path:
+// encodeJSONSource returns early when snap.Err != nil, so this field has to
+// be set in the initial struct literal, not assigned after the early return,
+// or every errored source would silently report "" -- exactly the sources a
+// consumer most needs to identify.
+func TestEncodeJSONCredentialsPathSurvivesFetchError(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	doc := encodeJSON([]Snapshot{
+		{Source: "claude", CredentialsPath: "/home/user/.claude/.credentials.json", Err: errors.New("offline")},
+		{Source: "codex"},
+	}, loadHistory(""), now)
+	claude := jsonSources(t, doc)[0].(map[string]any)
+	if claude["credentials_path"] != "/home/user/.claude/.credentials.json" {
+		t.Errorf("errored source credentials_path = %#v, want the path preserved", claude["credentials_path"])
+	}
+}
+
 // The empty account (today's only account) must keep the exact history key
 // format quotatop has always written: no doubled separator, no suffix.
 // Every future non-empty-account key still goes through the same helper, so

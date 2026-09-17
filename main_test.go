@@ -137,6 +137,9 @@ func TestDefaultSourcesWithNoAccountsMatchesTodaysBehavior(t *testing.T) {
 	if got, want := claudeSnap.Title, "CLAUDE"; got != want {
 		t.Errorf("claude Title = %q, want %q", got, want)
 	}
+	if got, want := claudeSnap.CredentialsPath, filepath.Join(home, ".claude", ".credentials.json"); got != want {
+		t.Errorf("claude CredentialsPath = %q, want the resolved default %q", got, want)
+	}
 
 	codex := codexSourceStates()
 	if len(codex) != 1 {
@@ -151,6 +154,9 @@ func TestDefaultSourcesWithNoAccountsMatchesTodaysBehavior(t *testing.T) {
 	}
 	if got, want := codexSnap.Title, "CODEX"; got != want {
 		t.Errorf("codex Title = %q, want %q", got, want)
+	}
+	if codexSnap.CredentialsPath != "" {
+		t.Errorf("codex CredentialsPath = %q, want empty: Codex has no single credentials file", codexSnap.CredentialsPath)
 	}
 
 	raw, err := json.Marshal(encodeJSON([]Snapshot{claudeSnap, codexSnap}, loadHistory(""), time.Now()))
@@ -185,6 +191,59 @@ func TestClaudeSourceStatesTwoAccountsOrderedByLabel(t *testing.T) {
 	}
 	if got, want := second.Identity(), "claude/work"; got != want {
 		t.Errorf("second Identity() = %q, want %q", got, want)
+	}
+}
+
+// A named Claude account's snapshot must carry that account's own
+// credentials path, not the default -- this is the value a fork-sandbox-style
+// consumer feeds straight into --claude-credentials to route a launch at a
+// specific account.
+func TestClaudeSourceStatesCredentialsPathIsTheConfiguredAccountPath(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setConfigValues(t, nil)
+	workPath := filepath.Join(home, "work.json")
+	t.Setenv("QUOTATOP_CLAUDE_ACCOUNT_work", workPath)
+	isolateAccountEnv(t, "QUOTATOP_CLAUDE_ACCOUNT_work")
+
+	states := claudeSourceStates()
+	if len(states) != 1 {
+		t.Fatalf("claudeSourceStates() has %d entries, want 1", len(states))
+	}
+	snap := states[0].fetch(true)
+	if snap.CredentialsPath != workPath {
+		t.Errorf("CredentialsPath = %q, want the configured account path %q", snap.CredentialsPath, workPath)
+	}
+}
+
+// A QUOTATOP_CLAUDE_ACCOUNT_ value is tilde-expanded, same as the config
+// file's values, but that does nothing for a bare relative value like
+// "creds/work.json" (nothing stops a config line writing exactly that), so
+// the snapshot's CredentialsPath must still come out absolute: it is
+// documented as always absolute, and a consumer routes --claude-credentials
+// off it verbatim.
+func TestClaudeSourceStatesCredentialsPathIsResolvedToAbsolute(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	setConfigValues(t, nil)
+	t.Chdir(home)
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rel := filepath.Join("creds", "work.json")
+	t.Setenv("QUOTATOP_CLAUDE_ACCOUNT_work", rel)
+	isolateAccountEnv(t, "QUOTATOP_CLAUDE_ACCOUNT_work")
+
+	states := claudeSourceStates()
+	if len(states) != 1 {
+		t.Fatalf("claudeSourceStates() has %d entries, want 1", len(states))
+	}
+	snap := states[0].fetch(true)
+	want := filepath.Join(cwd, rel)
+	if snap.CredentialsPath != want {
+		t.Errorf("CredentialsPath = %q, want the resolved absolute path %q", snap.CredentialsPath, want)
 	}
 }
 

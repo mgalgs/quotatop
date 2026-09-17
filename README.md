@@ -251,6 +251,20 @@ the account is refusing work — for example
 `workspace_member_usage_limit_reached` — when the source itself has reported
 a block, independent of any single window's percentage.
 
+A Claude source's `credentials_path` (string, always present, never
+omitted) is the absolute path this source reads its OAuth token from — the
+matching `QUOTATOP_CLAUDE_ACCOUNT_<label>` value, `QUOTATOP_CLAUDE_CREDENTIALS`,
+or the `~/.claude/.credentials.json` default, whichever applied. It is set
+regardless of whether the fetch succeeded, so an errored source can still be
+identified by which account's file it tried to read. Codex has no single
+credentials file, so its `credentials_path` is always `""`; an unlabeled
+Claude source falls back to `""` too, in the one case none of the above can
+resolve it — no `QUOTATOP_CLAUDE_ACCOUNT_<label>` or `QUOTATOP_CLAUDE_CREDENTIALS`
+override, and the home directory itself can't be determined. A consumer that
+manages several Claude accounts can use this to route a separate action —
+launching a process, say — at the same credentials file this reading came
+from.
+
 Window keys are `session`, `weekly_all` and `weekly_scoped` for Claude, and
 `primary` and `secondary` for Codex. Reset times come with a precomputed
 `resets_in_seconds`, and readings with an `observed_age_seconds`, so a shell

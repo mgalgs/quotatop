@@ -18,6 +18,7 @@ type jsonSource struct {
 	Source             string       `json:"source"`
 	ID                 string       `json:"id"`
 	Account            string       `json:"account,omitempty"`
+	CredentialsPath    string       `json:"credentials_path"`
 	Title              string       `json:"title"`
 	Plan               string       `json:"plan"`
 	Verb               string       `json:"verb"`
@@ -118,15 +119,16 @@ func sourceTitle(source string) string {
 
 func encodeJSONSource(snap Snapshot, history *History, now time.Time) jsonSource {
 	source := jsonSource{
-		Source:       snap.Source,
-		ID:           snap.Identity(),
-		Account:      snap.Account,
-		Title:        snap.Title,
-		Plan:         snap.Chip,
-		Verb:         snap.Verb,
-		Warning:      snap.Warning,
-		LimitReached: snap.LimitReached,
-		Windows:      make([]jsonWindow, 0),
+		Source:          snap.Source,
+		ID:              snap.Identity(),
+		Account:         snap.Account,
+		CredentialsPath: snap.CredentialsPath,
+		Title:           snap.Title,
+		Plan:            snap.Chip,
+		Verb:            snap.Verb,
+		Warning:         snap.Warning,
+		LimitReached:    snap.LimitReached,
+		Windows:         make([]jsonWindow, 0),
 	}
 	if !snap.Observed.IsZero() {
 		observedAt := jsonTime(snap.Observed)

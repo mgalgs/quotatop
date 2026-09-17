@@ -278,6 +278,38 @@ func TestClaudeMissingCredentialsAreAnOrdinaryError(t *testing.T) {
 	}
 }
 
+// A successful fetch must carry the credentials file's own path on the
+// snapshot: encodeJSONSource sees only a Snapshot, never the source struct
+// that produced it, so the path has to travel on the Snapshot itself.
+func TestClaudeFetchCarriesCredentialsPathOnSuccess(t *testing.T) {
+	stub := &claudeStub{status: 200, body: `{"limits":[{"kind":"session","percent":10}]}`}
+	src := claudeTestSource(t, stub)
+	snap := src.fetch(true)
+	if snap.Err != nil {
+		t.Fatalf("fetch failed: %v", snap.Err)
+	}
+	if snap.CredentialsPath != src.credentialsPath {
+		t.Errorf("CredentialsPath = %q, want %q", snap.CredentialsPath, src.credentialsPath)
+	}
+}
+
+// A fetch that fails -- here, a missing credentials file -- must still carry
+// the path it tried to read: the consumer needs to know which account's
+// credentials went wrong, not merely that one did.
+func TestClaudeFetchCarriesCredentialsPathOnFailure(t *testing.T) {
+	src := claudeSource{
+		credentialsPath: filepath.Join(t.TempDir(), "absent.json"),
+		cacheDir:        t.TempDir(),
+	}
+	snap := src.fetch(true)
+	if snap.Err == nil {
+		t.Fatalf("expected an error from a missing credentials file")
+	}
+	if snap.CredentialsPath != src.credentialsPath {
+		t.Errorf("CredentialsPath = %q, want %q", snap.CredentialsPath, src.credentialsPath)
+	}
+}
+
 // --- Codex ----------------------------------------------------------------
 
 func writeSessionFile(t *testing.T, dir, name, content string) {
