@@ -16,6 +16,11 @@ const (
 	maxLayout   = 132
 	panelGap    = 2
 	gaugeMinPad = 8
+
+	// compactMinPanel is the packing floor of the compact layout, not of full:
+	// full depends on 46 and looks wrong below it, while compact only needs
+	// room for a label, a percentage and a short gauge per line.
+	compactMinPanel = 30
 )
 
 // Layout names: what --layout accepts, what the l key will cycle, and what the
@@ -345,6 +350,81 @@ func panel(width int, snap *Snapshot, history *History, now time.Time, loading b
 		}
 	}
 
+	footer := panelFooter(snap, loading, now)
+	chip, footnote := panelChipFootnote(snap)
+	return box(width, title, chip, body, footer, footnote)
+}
+
+// compactWindowLine squeezes one window onto a single line: label, percentage
+// and gauge sharing a row. It is the whole of the compact layout's height
+// economy -- no sparkline, no detail line, no blank spacers between windows --
+// while keeping the two things that must survive: the window's current
+// percentage (a dash when the window expired), and its bar, which is still
+// the fastest read of which window is red.
+func compactWindowLine(width int, window Window) string {
+	pct, barPct := percentText(window.Percent), window.Percent
+	if window.Expired {
+		pct, barPct = "—", 0
+	}
+	var pctStyled string
+	if window.Expired {
+		pctStyled = styleDim.Render(pct)
+	} else {
+		pctStyled = lipgloss.NewStyle().Foreground(gradientAt(window.Percent / 100).color()).Bold(true).Render(pct)
+	}
+	label := styleTxt.Render(window.Label)
+	gaugeWidth := width - lipgloss.Width(label) - lipgloss.Width(pct) - 2
+	if gaugeWidth < 1 {
+		gaugeWidth = 1
+	}
+	return label + " " + pctStyled + " " + gauge(gaugeWidth, barPct)
+}
+
+// panelCompact renders one source with the layout that squeezes everything
+// into a smaller terminal: one line per window, the error squashed to a line,
+// no blank spacers. Every window's percentage and any blocked or error state
+// still appear -- a compact panel that hides a block is worse than one that
+// does not fit.
+func panelCompact(width int, snap *Snapshot, history *History, now time.Time, loading bool) string {
+	content := width - 4
+	if snap == nil {
+		return box(width, styleDim.Render("···"), "",
+			[]string{styleDim.Render("waiting for first reading...")}, "", "")
+	}
+
+	worst := 0.0
+	for _, window := range snap.Windows {
+		if window.Expired {
+			continue
+		}
+		worst = math.Max(worst, window.Percent)
+	}
+	title := lipgloss.NewStyle().Foreground(gradientAt(worst / 100).color()).Bold(true).Render(snap.Title)
+
+	var body []string
+	if snap.Err != nil {
+		title = styleErr.Bold(true).Render(snap.Title)
+		body = append(body, styleErr.Render(truncate(snap.Err.Error(), content)))
+	} else {
+		for _, window := range snap.Windows {
+			body = append(body, compactWindowLine(content, window))
+		}
+		if snap.LimitReached != "" {
+			body = append(body, styleErr.Render(truncate("blocked: "+humanizeReason(snap.LimitReached), content)))
+		}
+		if snap.Warning != "" {
+			body = append(body, styleWrn.Render(truncate(snap.Warning, content)))
+		}
+	}
+
+	footer := panelFooter(snap, loading, now)
+	chip, footnote := panelChipFootnote(snap)
+	return box(width, title, chip, body, footer, footnote)
+}
+
+// panelFooter is the bottom-edge content every layout shares: when the
+// reading was observed, or a refresh marker while a fetch is in flight.
+func panelFooter(snap *Snapshot, loading bool, now time.Time) string {
 	footer := styleDim.Render("no reading yet")
 	if snap.Err == nil && !snap.Observed.IsZero() {
 		footer = styleDim.Render(snap.Verb + " " + compactDuration(now.Sub(snap.Observed)) + " ago")
@@ -354,16 +434,21 @@ func panel(width int, snap *Snapshot, history *History, now time.Time, loading b
 	if loading {
 		footer = styleKey.Render("refreshing")
 	}
-	chip, footnote := "", styleDim.Render(snap.Footnote)
+	return footer
+}
+
+// panelChipFootnote is the chip and footnote every layout shares. A failed
+// reading drops its footnote: "cached ≤10m" under a panel that failed to read
+// anything describes data that is not there.
+func panelChipFootnote(snap *Snapshot) (chip, footnote string) {
+	chip, footnote = "", styleDim.Render(snap.Footnote)
 	if snap.Chip != "" {
 		chip = styleMut.Render(snap.Chip)
 	}
 	if snap.Err != nil {
-		// "cached ≤10m" under a panel that failed to read anything describes
-		// data that is not there.
 		footnote = ""
 	}
-	return box(width, title, chip, body, footer, footnote)
+	return chip, footnote
 }
 
 func (m model) headerLine(width int) string {
@@ -519,11 +604,20 @@ func fitHeight(view string, height int) string {
 	return strings.Join(kept, "\n")
 }
 
+// layoutName is the model's layout, reading the zero value as the default.
+func (m model) layoutName() string {
+	if m.layout == "" {
+		return layoutFull
+	}
+	return m.layout
+}
+
 // gridColumns is how many panels fit side by side at width, given panels no
-// narrower than minPanel with panelGap between them -- clamped to at least
-// one column and at most n, the number of panels there are to place.
-func gridColumns(width, n int) int {
-	cols := (width + panelGap) / (minPanel + panelGap)
+// narrower than min with panelGap between them -- clamped to at least one
+// column and at most n, the number of panels there are to place. Each layout
+// passes its own floor: full wants minPanel, compact wants compactMinPanel.
+func gridColumns(width, n, min int) int {
+	cols := (width + panelGap) / (min + panelGap)
 	if cols < 1 {
 		cols = 1
 	}
@@ -570,7 +664,15 @@ func (m model) View() string {
 
 	var rows []string
 	if n := len(m.sources); n > 0 {
-		cols := gridColumns(width, n)
+		renderPanel := panel
+		min := minPanel
+		if m.layoutName() == layoutCompact {
+			// Compact reuses the grid's packing arithmetic with its own, smaller
+			// floor; the equal-width rule the trailing row obeys is full-grid
+			// guidance, not a constraint this layout needs.
+			renderPanel, min = panelCompact, compactMinPanel
+		}
+		cols := gridColumns(width, n, min)
 		// Sized once for a full row of cols panels: a short trailing row (the
 		// last row of an n not divisible by cols) gets the same per-panel
 		// width as every row above it, rather than stretching to fill the
@@ -590,7 +692,7 @@ func (m model) View() string {
 				if i > 0 {
 					parts = append(parts, strings.Repeat(" ", panelGap))
 				}
-				parts = append(parts, panel(widths[i], source.snap, m.history, m.now, source.loading))
+				parts = append(parts, renderPanel(widths[i], source.snap, m.history, m.now, source.loading))
 			}
 			joined := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
 			// A short trailing row is narrower than width by design (see above),

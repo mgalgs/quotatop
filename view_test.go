@@ -227,7 +227,7 @@ func TestViewFitsTerminalWidth(t *testing.T) {
 
 func TestGridColumnsAndRowWidthsMatchOldTwoPanelLadder(t *testing.T) {
 	for _, width := range []int{94, 132} {
-		if cols := gridColumns(width, 2); cols != 2 {
+		if cols := gridColumns(width, 2, minPanel); cols != 2 {
 			t.Errorf("gridColumns(%d, 2) = %d, want 2", width, cols)
 		}
 		half := (width - panelGap) / 2
@@ -239,7 +239,7 @@ func TestGridColumnsAndRowWidthsMatchOldTwoPanelLadder(t *testing.T) {
 	}
 
 	width := 60
-	if cols := gridColumns(width, 2); cols != 1 {
+	if cols := gridColumns(width, 2, minPanel); cols != 1 {
 		t.Errorf("gridColumns(%d, 2) = %d, want 1", width, cols)
 	}
 	widths := rowWidths(width, 1)
@@ -387,6 +387,83 @@ func TestFitHeight(t *testing.T) {
 	}
 }
 
+// The headline of the compact layout: what full renders in 43 rows for three
+// stacked Claude-style panels fits a fresh 24-row terminal at 80 columns, with
+// no truncation, and without losing what the monitor exists to show.
+func TestCompactThreePanelsFitIn24RowsAt80Columns(t *testing.T) {
+	now := time.Now()
+	m := newModel(20*time.Second, loadHistory(""))
+	m.width, m.height, m.now, m.layout = 80, 24, now, layoutCompact
+	m.sources = threeWindowSources(now, 3)
+
+	view := m.View()
+	lines := strings.Split(view, "\n")
+	if len(lines) > 24 {
+		t.Fatalf("compact at 80x24 rendered %d lines, want at most 24:\n%s", len(lines), view)
+	}
+	if strings.Contains(view, truncationMarker) {
+		t.Errorf("compact at 80x24 fits only by being cut; it must fit on its own:\n%s", view)
+	}
+
+	// Every window's percentage survives the squeeze.
+	for _, pct := range []string{"7%", "33%", "58%", "12%", "45%", "61%", "3%", "24%", "77%"} {
+		if !strings.Contains(view, pct) {
+			t.Errorf("compact view lost %s:\n%s", pct, view)
+		}
+	}
+}
+
+// A compact panel that hides a blocked or erroring account is worse than one
+// that does not fit: both must survive the squeeze, and an expired window
+// still withholds its stale percentage.
+func TestCompactKeepsBlockedAndErrorStates(t *testing.T) {
+	now := time.Now()
+	m := newModel(20*time.Second, loadHistory(""))
+	m.width, m.height, m.now, m.layout = 80, 24, now, layoutCompact
+	m.sources = []sourceState{
+		{snap: &Snapshot{Source: "claude", Title: "S0", Observed: now,
+			Windows:      []Window{{Key: "session", Label: "5-hour", Percent: 10}},
+			LimitReached: "usage_limit_reached"}},
+		{snap: &Snapshot{Source: "codex", Title: "S1", Err: errors.New("endpoint down")}},
+		{snap: &Snapshot{Source: "claude", Title: "S2", Observed: now,
+			Windows: []Window{{Key: "session", Label: "5-hour", Percent: 20, Expired: true}}}},
+	}
+
+	view := m.View()
+	if len(strings.Split(view, "\n")) > 24 {
+		t.Errorf("compact with blocked and error panels overran 24 rows:\n%s", view)
+	}
+	if !strings.Contains(view, "blocked: usage limit reached") {
+		t.Errorf("compact hid a blocked account:\n%s", view)
+	}
+	if !strings.Contains(view, "endpoint down") {
+		t.Errorf("compact hid an error state:\n%s", view)
+	}
+	if strings.Contains(view, "20%") {
+		t.Errorf("compact showed an expired window's stale percentage:\n%s", view)
+	}
+}
+
+// When a reason is too long for a packed panel it truncates -- but the fact
+// of the block must remain, or the compact panel has hidden the one state the
+// monitor exists to surface.
+func TestCompactTruncatesButKeepsBlockedMarker(t *testing.T) {
+	now := time.Now()
+	m := newModel(20*time.Second, loadHistory(""))
+	m.width, m.height, m.now, m.layout = 80, 24, now, layoutCompact
+	m.sources = []sourceState{{snap: &Snapshot{Source: "claude", Title: "S0", Observed: now,
+		Windows:      []Window{{Key: "session", Label: "5-hour", Percent: 10}},
+		LimitReached: strings.Repeat("very_long_reason_code_", 5)}}}
+
+	view := m.View()
+	if len(strings.Split(view, "\n")) > 24 {
+		t.Errorf("compact overran 24 rows with a long block reason:\n%s", view)
+	}
+	if !strings.Contains(view, "blocked:") {
+		t.Errorf("compact lost the block marker under a long reason:\n%s", view)
+	}
+}
+
 // topBorderCounts renders m and returns, for every line that opens a panel
 // row (contains the box's top-left corner), how many panels start on that
 // line -- i.e. the row's panel count, in row order.
@@ -458,7 +535,7 @@ func TestViewTrailingRowStaysUnderFullRowColumn(t *testing.T) {
 	m.width, m.now = 180, now
 	m.sources = gridSources(now, 3)
 
-	cols := gridColumns(maxLayout, 3)
+	cols := gridColumns(maxLayout, 3, minPanel)
 	colWidths := rowWidths(maxLayout, cols)
 
 	var topBorders []string
@@ -513,7 +590,7 @@ func TestViewRendersTwoClaudeAccountsPlusCodexRealistically(t *testing.T) {
 		t.Fatalf("row panel counts = %v, want %v", got, want)
 	}
 
-	cols := gridColumns(maxLayout, 3)
+	cols := gridColumns(maxLayout, 3, minPanel)
 	colWidths := rowWidths(maxLayout, cols)
 
 	var topBorders []string
