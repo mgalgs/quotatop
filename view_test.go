@@ -643,11 +643,114 @@ func TestProjectSustainedWithoutExhaustion(t *testing.T) {
 	}
 }
 
+// The headline fix: a window that sat idle before use began must be measured
+// from when use began, not from when the window opened, or the rate is
+// diluted by the idle stretch and a real warning can hide behind a calm
+// number. The bar had already accrued 3% by the time activity was dated, so
+// that much is charged to the idle stretch before the anchor, not to the
+// post-anchor slope: the rate is (12-3)/24, not 12/24.
+func TestProjectSustainedMeasuresFromFirstActivity(t *testing.T) {
+	now := time.Now()
+	window := Window{Key: "weekly_all", Percent: 12, Length: 168 * time.Hour,
+		ResetsAt: now.Add(72 * time.Hour)} // 96h elapsed since the window opened
+	history := loadHistory("")
+	windowStart := now.Add(-96 * time.Hour)
+	history.Add("claude/weekly_all", windowStart, 0)            // the rollover zero
+	history.Add("claude/weekly_all", now.Add(-95*time.Hour), 0) // still zero; deduped away by Add
+	history.Add("claude/weekly_all", now.Add(-48*time.Hour), 0) // still zero; deduped away by Add
+	history.Add("claude/weekly_all", now.Add(-25*time.Hour), 0) // still zero; deduped away by Add
+	history.Add("claude/weekly_all", now.Add(-24*time.Hour), 3) // bar leaves zero: activity begins
+	history.Add("claude/weekly_all", now.Add(-12*time.Hour), 8)
+	projection := history.Project("claude", window, now)
+	if !projection.Valid || !projection.Sustained {
+		t.Fatalf("expected a sustained projection: %+v", projection)
+	}
+	if projection.RatePerHour < 0.35 || projection.RatePerHour > 0.4 {
+		t.Errorf("rate = %v%%/h, want ~0.375 ((12-3)/24 since first activity, not 12/96 from window open)",
+			projection.RatePerHour)
+	}
+}
+
+// The promise this fix must keep: a machine with no history at all reproduces
+// today's number exactly, because there is nothing to measure activity from.
+func TestProjectSustainedEmptyHistoryFallsBackToWindowOpen(t *testing.T) {
+	now := time.Now()
+	window := Window{Key: "weekly_all", Percent: 41, Length: 168 * time.Hour,
+		ResetsAt: now.Add(127 * time.Hour)} // 41h elapsed since the window opened
+	projection := loadHistory("").Project("claude", window, now)
+	if !projection.Valid || !projection.Sustained {
+		t.Fatalf("expected a sustained projection: %+v", projection)
+	}
+	if projection.RatePerHour < 0.9 || projection.RatePerHour > 1.1 {
+		t.Errorf("rate = %v%%/h, want ~1.0 from window open (no history to measure activity from)",
+			projection.RatePerHour)
+	}
+}
+
+// History that exists but never reaches a zero reading inside this window
+// (it starts mid-use, or was trimmed) cannot date first activity either, so
+// it falls back the same way empty history does.
+func TestProjectSustainedNoZeroSampleFallsBackToWindowOpen(t *testing.T) {
+	now := time.Now()
+	window := Window{Key: "weekly_all", Percent: 20, Length: 168 * time.Hour,
+		ResetsAt: now.Add(68 * time.Hour)} // 100h elapsed since the window opened
+	history := loadHistory("")
+	history.Add("claude/weekly_all", now.Add(-90*time.Hour), 5) // never reads zero
+	projection := history.Project("claude", window, now)
+	if !projection.Valid || !projection.Sustained {
+		t.Fatalf("expected a sustained projection: %+v", projection)
+	}
+	if projection.RatePerHour < 0.19 || projection.RatePerHour > 0.21 {
+		t.Errorf("rate = %v%%/h, want ~0.2 (20/100, measured from window open)", projection.RatePerHour)
+	}
+}
+
+// A zero reading that belongs to the *previous* window must not be mistaken
+// for this window's first activity.
+func TestProjectSustainedIgnoresZeroSampleFromPreviousWindow(t *testing.T) {
+	now := time.Now()
+	window := Window{Key: "weekly_all", Percent: 25, Length: 168 * time.Hour,
+		ResetsAt: now.Add(118 * time.Hour)} // 50h elapsed since the window opened
+	history := loadHistory("")
+	history.Add("claude/weekly_all", now.Add(-60*time.Hour), 0) // the previous window's zero sample
+	projection := history.Project("claude", window, now)
+	if !projection.Valid || !projection.Sustained {
+		t.Fatalf("expected a sustained projection: %+v", projection)
+	}
+	if projection.RatePerHour < 0.45 || projection.RatePerHour > 0.55 {
+		t.Errorf("rate = %v%%/h, want ~0.5 (25/50, the earlier window's zero must not count)",
+			projection.RatePerHour)
+	}
+}
+
+// First activity under the 12h floor does not disqualify the sustained model
+// by itself: the window has been open 38h, long enough on its own to smooth
+// over the same nights and weekends the model exists for, so it falls back
+// to measuring from the window's own open (pct 0) instead of abandoning the
+// model for the volatile live slope. Only a window that is itself still
+// young (TestProjectSustainedFallsBackEarlyInWindow) falls through.
+func TestProjectSustainedFallsBackToWindowOpenWhenActivityTooRecent(t *testing.T) {
+	now := time.Now()
+	window := Window{Key: "weekly_all", Percent: 8, Length: 168 * time.Hour,
+		ResetsAt: now.Add(130 * time.Hour)} // 38h elapsed since the window opened
+	history := loadHistory("")
+	history.Add("claude/weekly_all", now.Add(-8*time.Hour), 0) // first activity only 8h ago
+	history.Add("claude/weekly_all", now.Add(-time.Hour), 4)
+	projection := history.Project("claude", window, now)
+	if !projection.Valid || !projection.Sustained {
+		t.Fatalf("expected a sustained projection: %+v", projection)
+	}
+	if projection.RatePerHour < 0.19 || projection.RatePerHour > 0.22 {
+		t.Errorf("rate = %v%%/h, want ~0.21 (8/38 from window open, not the recent slope)",
+			projection.RatePerHour)
+	}
+}
+
 func TestProjectionTextLabelsSustainedRate(t *testing.T) {
 	now := time.Now()
 	sustained := Projection{RatePerHour: 1.0, AtReset: 168, ExhaustAt: now.Add(59 * time.Hour),
 		Valid: true, Sustained: true}
-	text, _, urgent := projectionText(sustained, now.Add(127*time.Hour), now)
+	text, _, urgent := projectionText(sustained, now.Add(127*time.Hour), 168*time.Hour, now)
 	if !urgent {
 		t.Error("sustained exhaustion should render as urgent")
 	}
@@ -655,7 +758,7 @@ func TestProjectionTextLabelsSustainedRate(t *testing.T) {
 		t.Errorf("sustained rate text = %q, want the 'avg' marker", text)
 	}
 	live := Projection{RatePerHour: 1.0, AtReset: 60, Valid: true}
-	if text, _, _ := projectionText(live, time.Time{}, now); strings.Contains(text, "avg") {
+	if text, _, _ := projectionText(live, time.Time{}, 168*time.Hour, now); strings.Contains(text, "avg") {
 		t.Errorf("live rate text = %q must not carry the 'avg' marker", text)
 	}
 }
@@ -756,7 +859,7 @@ func TestProjectionTextGap(t *testing.T) {
 	// Short: full in 54h, reset 116h away → 62h = 2d 14h short.
 	short := Projection{RatePerHour: 0.9, AtReset: 127, ExhaustAt: now.Add(54 * time.Hour),
 		FullAt: now.Add(54 * time.Hour), Valid: true, Sustained: true}
-	text, gap, urgent := projectionText(short, now.Add(116*time.Hour), now)
+	text, gap, urgent := projectionText(short, now.Add(116*time.Hour), 168*time.Hour, now)
 	if !urgent {
 		t.Error("short case should render as urgent")
 	}
@@ -770,7 +873,7 @@ func TestProjectionTextGap(t *testing.T) {
 	// Spare: full in 95h, reset 87h away → 8h spare, headline still at-reset.
 	spare := Projection{RatePerHour: 0.5, AtReset: 72, FullAt: now.Add(95 * time.Hour),
 		Valid: true, Sustained: true}
-	text, gap, urgent = projectionText(spare, now.Add(87*time.Hour), now)
+	text, gap, urgent = projectionText(spare, now.Add(87*time.Hour), 168*time.Hour, now)
 	if urgent {
 		t.Error("spare case must not render as urgent")
 	}
@@ -782,12 +885,42 @@ func TestProjectionTextGap(t *testing.T) {
 	}
 
 	// No reset deadline to measure against.
-	if _, gap, _ = projectionText(short, time.Time{}, now); gap != "" {
+	if _, gap, _ = projectionText(short, time.Time{}, 168*time.Hour, now); gap != "" {
 		t.Errorf("gap = %q with an unknown reset, want empty", gap)
 	}
 	// Deadlines a hair apart are noise.
-	if _, gap, _ = projectionText(short, short.FullAt.Add(30*time.Second), now); gap != "" {
+	if _, gap, _ = projectionText(short, short.FullAt.Add(30*time.Second), 168*time.Hour, now); gap != "" {
 		t.Errorf("gap = %q with deadlines under a minute apart, want empty", gap)
+	}
+}
+
+// A gap bigger than a whole window (several more windows would have to pass
+// before the pace ran dry or came in with room to spare) is not a useful
+// reading, so it is suppressed -- but the headline itself must survive.
+func TestProjectionTextSuppressesGapBeyondAWindowLength(t *testing.T) {
+	now := time.Now()
+	weekly := 168 * time.Hour
+	resetsAt := now.Add(20 * time.Hour)
+
+	// 190h gap on a 168h window: suppressed.
+	huge := Projection{RatePerHour: 0.5, AtReset: 90, FullAt: now.Add(210 * time.Hour), Valid: true}
+	text, gap, _ := projectionText(huge, resetsAt, weekly, now)
+	if gap != "" {
+		t.Errorf("gap = %q for a 190h gap on a 168h window, want suppressed", gap)
+	}
+	if text == "" {
+		t.Error("headline text must survive even when the gap is suppressed")
+	}
+
+	// 167h gap on a 168h window: still under a window length, so it renders.
+	justUnder := Projection{RatePerHour: 0.5, AtReset: 90, FullAt: now.Add(187 * time.Hour), Valid: true}
+	if _, gap, _ := projectionText(justUnder, resetsAt, weekly, now); gap == "" {
+		t.Error("gap just under a window length was suppressed, want it kept")
+	}
+
+	// windowLength of 0 means unknown -- never suppress.
+	if _, gap, _ := projectionText(huge, resetsAt, 0, now); gap == "" {
+		t.Error("gap = empty with windowLength 0, want no suppression")
 	}
 }
 

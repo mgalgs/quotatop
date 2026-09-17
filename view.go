@@ -132,8 +132,8 @@ func resetText(resetsAt time.Time, now time.Time, brief bool) string {
 // (" (2d 14h short)"), returned apart from text so the caller can shed it
 // when the detail line does not fit — after the absolute reset time, which
 // gives way first; it is empty when there is no reset deadline to measure
-// against.
-func projectionText(projection Projection, resetsAt, now time.Time) (string, string, bool) {
+// against, or when it exceeds windowLength (pass 0 to never suppress it).
+func projectionText(projection Projection, resetsAt time.Time, windowLength time.Duration, now time.Time) (string, string, bool) {
 	if !projection.Valid {
 		return "", "", false
 	}
@@ -143,10 +143,19 @@ func projectionText(projection Projection, resetsAt, now time.Time) (string, str
 	var gap string
 	if !projection.FullAt.IsZero() && !resetsAt.IsZero() && resetsAt.After(now) {
 		if diff := projection.FullAt.Sub(resetsAt); diff.Abs() >= time.Minute {
-			if diff < 0 {
-				gap = " (" + compactDuration(-diff) + " short)"
-			} else {
-				gap = " (" + compactDuration(diff) + " spare)"
+			// A gap bigger than a whole window means several more windows
+			// would have to pass before the pace came in with room to
+			// spare -- not a useful reading, and the headline (full-in or
+			// at-reset) already carries the number that matters. In
+			// practice this only ever suppresses spare: a short gap is
+			// bounded by how much of the window remains, so it never
+			// exceeds windowLength.
+			if windowLength <= 0 || diff.Abs() <= windowLength {
+				if diff < 0 {
+					gap = " (" + compactDuration(-diff) + " short)"
+				} else {
+					gap = " (" + compactDuration(diff) + " spare)"
+				}
 			}
 		}
 	}
@@ -229,7 +238,7 @@ func windowLines(width int, identity string, window Window, history *History, no
 	// than extrapolating from the discarded reading.
 	if !window.Expired {
 		projection := history.Project(identity, window, now)
-		if text, gap, urgent := projectionText(projection, window.ResetsAt, now); text != "" {
+		if text, gap, urgent := projectionText(projection, window.ResetsAt, window.Length, now); text != "" {
 			style := styleDim
 			if urgent {
 				style = styleErr
