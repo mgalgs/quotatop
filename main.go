@@ -52,7 +52,8 @@ type model struct {
 	showHelp bool
 
 	// layout is one of layouts, or "" (the zero value), which reads as the
-	// default, full. The l key cycles it; --layout sets it for --snapshot.
+	// default, full. main applies the persisted layout here at startup, the
+	// l key cycles it, and --layout overrides it for --snapshot.
 	layout string
 }
 
@@ -357,10 +358,29 @@ func main() {
 		os.Exit(renderJSON(loadAppendOnlyHistory(path), *fresh, !*noHistory))
 	}
 
+	// The persisted preferences apply to this run. The read degrades
+	// silently to the defaults, and the --json path above has already
+	// exited without touching the state file: it renders no frame, and a
+	// status-line caller running every 60 seconds must not be reading or
+	// writing preferences.
+	state := loadState(statePath())
+	themeIndex = state.Theme
 	m := newModel(*interval, loadHistory(path))
+	m.layout = state.Layout
 
 	if *snapshot {
-		os.Exit(renderSnapshot(m, *width, *height, *layout, *theme, *fresh))
+		// An explicitly given flag beats the persisted state for this frame;
+		// the flag package cannot tell "not given" from "given the zero
+		// value" by the value alone, so the test is whether the flag was
+		// visited at all rather than what it holds.
+		themeIdx, layoutName := state.Theme, state.Layout
+		if flagWasSet(flag.CommandLine, "theme") {
+			themeIdx = *theme
+		}
+		if flagWasSet(flag.CommandLine, "layout") {
+			layoutName = *layout
+		}
+		os.Exit(renderSnapshot(m, *width, *height, layoutName, themeIdx, *fresh))
 	}
 
 	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
@@ -404,6 +424,21 @@ func recordJSONSnapshots(history *History, snaps []Snapshot, record bool) {
 	for _, snap := range snaps {
 		recordSnapshot(history, snap)
 	}
+}
+
+// flagWasSet reports whether name was explicitly given on fs. The flag
+// package cannot distinguish "not given" from "given the zero value" by
+// looking at the value alone: --theme 0 and no flag both read as 0, so the
+// theme flag needs to know it was visited at all to win its precedence over
+// the persisted state.
+func flagWasSet(fs *flag.FlagSet, name string) bool {
+	set := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == name {
+			set = true
+		}
+	})
+	return set
 }
 
 // renderSnapshot prints a single frame. Handy for a quick non-interactive look,
