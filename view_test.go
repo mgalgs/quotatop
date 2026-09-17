@@ -261,6 +261,132 @@ func gridSources(now time.Time, n int) []sourceState {
 	return sources
 }
 
+// threeWindowSources builds n sources, each with the three windows a Claude
+// account has, carrying distinct percentages so a test can assert every
+// window's reading survived a layout.
+func threeWindowSources(now time.Time, n int) []sourceState {
+	perSource := [][3]float64{{7, 33, 58}, {12, 45, 61}, {3, 24, 77}, {18, 40, 66}, {26, 52, 81}}
+	labels := []string{"5-hour", "Weekly", "Weekly · Fable"}
+	sources := make([]sourceState, n)
+	for i := range sources {
+		windows := make([]Window, 3)
+		for j := range windows {
+			windows[j] = Window{Key: fmt.Sprintf("w%d", j), Label: labels[j],
+				Percent: perSource[i%len(perSource)][j], ResetsAt: now.Add(24 * time.Hour)}
+		}
+		sources[i] = sourceState{snap: &Snapshot{Source: "claude", Title: fmt.Sprintf("S%d", i),
+			Observed: now, Windows: windows}}
+	}
+	return sources
+}
+
+// The invariants every layout must hold at any size: at most m.height lines
+// (when height > 0), and no line wider than the terminal. These are checked
+// across a table of sizes rather than one magic geometry: the invariant is
+// what matters, and a test that only checks 80x24 passes while the layout
+// breaks at 81x25.
+func TestViewFitsHeightAndWidthInEveryLayout(t *testing.T) {
+	now := time.Now()
+	for _, layout := range layouts {
+		for _, count := range []int{3, 5} {
+			for _, help := range []bool{false, true} {
+				for _, size := range []struct{ width, height int }{
+					{80, 24}, {96, 30}, {100, 28}, {120, 40}, {132, 50},
+					{60, 24}, {132, 24}, {132, 10}, {100, 8}, {80, 1},
+				} {
+					m := newModel(20*time.Second, loadHistory(""))
+					m.width, m.height, m.now, m.layout, m.showHelp = size.width, size.height, now, layout, help
+					m.sources = threeWindowSources(now, count)
+					lines := strings.Split(m.View(), "\n")
+					if len(lines) > size.height {
+						t.Errorf("layout %s, %d sources, %dx%d: %d lines, want at most %d",
+							layout, count, size.width, size.height, len(lines), size.height)
+					}
+					for i, line := range lines {
+						if got := lipgloss.Width(line); got > size.width {
+							t.Errorf("layout %s, %d sources, %dx%d: line %d is %d cells wide, want at most %d: %q",
+								layout, count, size.width, size.height, i, got, size.width, line)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// A terminal shorter than the content must be met with truncation and a
+// visible marker on the last retained line -- not overflow, and not silence.
+func TestViewTruncatesWithMarkerWhenTallerThanTerminal(t *testing.T) {
+	now := time.Now()
+	m := newModel(20*time.Second, loadHistory(""))
+	m.width, m.now = 80, now
+	m.sources = threeWindowSources(now, 3)
+
+	// The unclamped full view of three stacked three-window panels is far
+	// taller than 10 rows, so a height of 10 must cut it and say so.
+	m.height = 10
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) > 10 {
+		t.Fatalf("height 10 rendered %d lines, want at most 10", len(lines))
+	}
+	if !strings.Contains(lines[len(lines)-1], truncationMarker) {
+		t.Errorf("last line = %q, want the truncation marker", lines[len(lines)-1])
+	}
+	if got := lipgloss.Width(lines[len(lines)-1]); got > 80 {
+		t.Errorf("marker line is %d cells wide, must not itself push over the width", got)
+	}
+
+	// A tall terminal keeps everything and carries no marker.
+	m.height = 50
+	view := m.View()
+	if strings.Contains(view, truncationMarker) {
+		t.Error("tall terminal render carries a truncation marker, want none")
+	}
+
+	// No reported height keeps today's behaviour: no limit, no marker.
+	m.height = 0
+	view = m.View()
+	if strings.Contains(view, truncationMarker) {
+		t.Error("unheighted render carries a truncation marker, want none")
+	}
+
+	// The degenerate one-row terminal still gets a single line, not a panic.
+	m.height = 1
+	lines = strings.Split(m.View(), "\n")
+	if len(lines) != 1 || !strings.Contains(lines[0], truncationMarker) {
+		t.Errorf("height 1 rendered %d lines %v, want exactly one with the marker", len(lines), lines)
+	}
+}
+
+func TestFitHeight(t *testing.T) {
+	view := strings.Repeat("line\n", 19) + "line" // 20 lines
+
+	if got := fitHeight(view, 0); got != view {
+		t.Error("height 0 must leave the view untouched")
+	}
+	if got := fitHeight(view, -3); got != view {
+		t.Error("negative height must leave the view untouched")
+	}
+	if got := fitHeight(view, 20); got != view {
+		t.Error("an exactly-fitting height must leave the view untouched")
+	}
+	for _, height := range []int{1, 2, 10, 19} {
+		got := strings.Split(fitHeight(view, height), "\n")
+		if len(got) != height {
+			t.Errorf("height %d produced %d lines, want exactly %d", height, len(got), height)
+		}
+		if !strings.Contains(got[len(got)-1], truncationMarker) {
+			t.Errorf("height %d: last line %q, want the marker", height, got[len(got)-1])
+		}
+		if height >= 2 && !strings.Contains(got[height-2], "line") {
+			t.Errorf("height %d: line before the marker is %q, want retained content", height, got[height-2])
+		}
+	}
+	if got := strings.Split(fitHeight(view, 1), "\n"); len(got) != 1 || !strings.Contains(got[0], truncationMarker) {
+		t.Errorf("height 1 = %v, want one marker line", got)
+	}
+}
+
 // topBorderCounts renders m and returns, for every line that opens a panel
 // row (contains the box's top-left corner), how many panels start on that
 // line -- i.e. the row's panel count, in row order.

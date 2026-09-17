@@ -489,6 +489,36 @@ func shortenPath(path string) string {
 	return path
 }
 
+// truncationMarker is the last line of a View() that did not fit the
+// terminal's height. Overflow is truncated rather than allowed, because
+// overflow makes the terminal scroll, which pushes the header off the top and
+// leaves the frame jumping around -- the exact symptom a full-screen monitor
+// is supposed to prevent. A stable frame that admits it is cut is strictly
+// better than an unstable one that hides it.
+const truncationMarker = "\u2026"
+
+// fitHeight is the backstop that keeps View()'s height invariant: when height
+// is positive the result never exceeds height lines. Overflow is truncated
+// and the marker becomes the final line, so the cut is visible without
+// itself pushing the output over the limit. A height of 0 or less means no
+// limit, leaving piped --snapshot and harnesses that never report a size
+// untouched.
+func fitHeight(view string, height int) string {
+	if height <= 0 {
+		return view
+	}
+	lines := strings.Split(view, "\n")
+	if len(lines) <= height {
+		return view
+	}
+	if height < 2 {
+		return styleDim.Render(truncationMarker)
+	}
+	kept := append([]string(nil), lines[:height-1]...)
+	kept = append(kept, styleDim.Render(truncationMarker))
+	return strings.Join(kept, "\n")
+}
+
 // gridColumns is how many panels fit side by side at width, given panels no
 // narrower than minPanel with panelGap between them -- clamped to at least
 // one column and at most n, the number of panels there are to place.
@@ -582,6 +612,13 @@ func (m model) View() string {
 	view := strings.Join(sections, "\n")
 	if m.width > width {
 		view = lipgloss.PlaceHorizontal(m.width, lipgloss.Center, view)
+	}
+	// Final backstop, so the invariant -- m.height > 0 means View() returns at
+	// most m.height lines -- holds for every layout, including ones added
+	// later, rather than being a calculation each layout is trusted to get
+	// right.
+	if m.height > 0 {
+		view = fitHeight(view, m.height)
 	}
 	return view
 }

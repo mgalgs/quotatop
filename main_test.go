@@ -86,6 +86,32 @@ func TestRenderSnapshotRejectsUnknownLayout(t *testing.T) {
 	}
 }
 
+// --height is a hard line budget on the rendered frame, threaded all the way
+// down to View() -- the property every layout in this round must satisfy.
+func TestRenderSnapshotTruncatesToHeight(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	isolateAccountEnv(t)
+	fetchModel := func() model {
+		now := time.Now()
+		m := newModel(20*time.Second, loadHistory(""))
+		snap := demoSnapshot(now)
+		m.sources = []sourceState{{fetch: func(bool) Snapshot { return *snap }}}
+		return m
+	}
+	stdout, _ := captureStdout(t, func() {
+		if code := renderSnapshot(fetchModel(), 80, 6, "", false); code != 0 {
+			t.Errorf("exit code = %d, want 0", code)
+		}
+	})
+	lines := strings.Split(strings.TrimRight(stdout, "\n"), "\n")
+	if len(lines) > 6 {
+		t.Errorf("rendered %d lines at height 6, want at most 6", len(lines))
+	}
+	if !strings.Contains(lines[len(lines)-1], "\u2026") {
+		t.Errorf("last line = %q, want the truncation marker", lines[len(lines)-1])
+	}
+}
+
 func TestDefaultSourcesWithNoAccountsMatchesTodaysBehavior(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
