@@ -216,22 +216,17 @@ func TestClaudeSourceStatesCredentialsPathIsTheConfiguredAccountPath(t *testing.
 	}
 }
 
-// A QUOTATOP_CLAUDE_ACCOUNT_ value is not tilde-expanded and can be relative
-// (nothing stops a config line like "creds/work.json"), so the snapshot's
-// CredentialsPath must still come out absolute: it is documented as always
-// absolute, and a consumer routes --claude-credentials off it verbatim.
+// A QUOTATOP_CLAUDE_ACCOUNT_ value is tilde-expanded, same as the config
+// file's values, but that does nothing for a bare relative value like
+// "creds/work.json" (nothing stops a config line writing exactly that), so
+// the snapshot's CredentialsPath must still come out absolute: it is
+// documented as always absolute, and a consumer routes --claude-credentials
+// off it verbatim.
 func TestClaudeSourceStatesCredentialsPathIsResolvedToAbsolute(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	setConfigValues(t, nil)
-	oldwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(oldwd) })
-	if err := os.Chdir(home); err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(home)
 	cwd, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)

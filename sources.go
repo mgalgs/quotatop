@@ -198,7 +198,7 @@ func defaultClaudeSource() claudeSource {
 	// macOS user whose token lives in the Keychain and who has exported it
 	// to a JSON file of the same shape.
 	if override := setting("QUOTATOP_CLAUDE_CREDENTIALS"); override != "" {
-		source.credentialsPath = override
+		source.credentialsPath = expandTilde(override)
 	}
 	return source
 }
