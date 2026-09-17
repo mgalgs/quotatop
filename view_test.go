@@ -1336,7 +1336,7 @@ func TestPanelCompactWithProjectionIsRectangular(t *testing.T) {
 			{Key: "weekly_all", Label: "Weekly", Percent: 41, Length: 168 * time.Hour, ResetsAt: now.Add(127 * time.Hour)},
 			{Key: "weekly_scoped", Label: "Weekly · Fable", Percent: 12, Length: 168 * time.Hour, ResetsAt: now.Add(127 * time.Hour)},
 		}}
-	cols := computeCompactColumns([]sourceState{{snap: snap}})
+	cols := computeCompactColumns([]sourceState{{snap: snap}}, 34-4)
 	for _, layout := range []string{layoutCompact, layoutCompactVertical} {
 		for _, width := range []int{34, 46, 66, 132} {
 			everyLineWidth(t, panelCompact(width, snap, history, now, false, cols), width, layout)
@@ -1359,7 +1359,7 @@ func TestCompactForecastShownOnlyWhenProjected(t *testing.T) {
 	expired.Expired = true
 
 	plain := func(line string) string { return ansiStrip(line) }
-	cols := computeCompactColumns([]sourceState{{snap: &Snapshot{Windows: []Window{withProj, without, expired}}}})
+	cols := computeCompactColumns([]sourceState{{snap: &Snapshot{Windows: []Window{withProj, without, expired}}}}, 66)
 
 	if line := compactWindowLine(66, "claude", withProj, history, now, cols); !strings.Contains(plain(line), "full in") {
 		t.Errorf("window with a projection: bar line = %q, want the forecast headline inside the bar", line)
@@ -1384,7 +1384,7 @@ func TestCompactForecastOverlayInEveryTheme(t *testing.T) {
 	snap := &Snapshot{Source: "claude", Title: "CLAUDE", Observed: now,
 		Windows: []Window{{Key: "weekly_all", Label: "Weekly", Percent: 41,
 			Length: 168 * time.Hour, ResetsAt: now.Add(127 * time.Hour)}}}
-	cols := computeCompactColumns([]sourceState{{snap: snap}})
+	cols := computeCompactColumns([]sourceState{{snap: snap}}, 66-4)
 	for i := range themes {
 		setThemeIndex(t, i)
 		width := 66
@@ -1445,7 +1445,7 @@ func TestCompactForecastFitRuleAtPanelWidth(t *testing.T) {
 		Length: 168 * time.Hour, ResetsAt: now.Add(127 * time.Hour)}
 	without := withProj
 	without.Length = 0
-	cols := computeCompactColumns([]sourceState{{snap: &Snapshot{Windows: []Window{withProj, without}}}})
+	cols := computeCompactColumns([]sourceState{{snap: &Snapshot{Windows: []Window{withProj, without}}}}, 66)
 
 	// gauge width at panel width W is W-11; the 14-cell forecast needs 22.
 	if got, want := compactWindowLine(31, "claude", withProj, history, now, cols),
@@ -1694,8 +1694,9 @@ func TestCompactBarsShareOneColumn(t *testing.T) {
 			m.width, m.now, m.layout = width, now, layout
 			m.sources = threeWindowSources(now, 3)
 			rows := compactRows(m.View())
-			if len(rows) == 0 {
-				t.Fatalf("%s at width %d: found no gauge rows", layout, width)
+			if len(rows) != 9 {
+				t.Fatalf("%s at width %d: found %d gauge rows, want 9 (3 sources x 3 windows) -- a bar the parser cannot see through must fail loud, not shrink the rows this test checks",
+					layout, width, len(rows))
 			}
 			wantOverhead := rows[0].boxWidth - rows[0].barWidth
 			for _, row := range rows[1:] {
@@ -1706,6 +1707,54 @@ func TestCompactBarsShareOneColumn(t *testing.T) {
 				if overhead := row.boxWidth - row.barWidth; overhead != wantOverhead {
 					t.Errorf("%s at width %d: a %d-wide box leaves %d cells for label+pct+borders but a %d-wide box leaves %d, want the same overhead in every box",
 						layout, width, rows[0].boxWidth, wantOverhead, row.boxWidth, overhead)
+				}
+			}
+		}
+	}
+}
+
+// The gaugeMinPad rescue -- the label column giving way when a panel is too
+// narrow to keep a gaugeMinPad-wide bar -- must be derived once, from the
+// narrowest panel that will be drawn, not recomputed by each panel from its
+// own width. rowWidths gives an unevenly-divided grid row's last column
+// whatever the division rounded away, so two panels in the same row can be a
+// cell or two apart; a 100%-percentage window (a 4-cell percentage column,
+// wider than every other reading) narrows the room left for the gauge
+// enough that this rescue actually triggers, which TestCompactBarsShareOneColumn's
+// 2-3 cell percentages never do. If the rescue used each panel's own width,
+// the narrower and wider panels in a row would shrink their label columns by
+// different amounts and their bars would stop starting at the same offset
+// from their own box.
+func TestCompactBarsShareOneColumnWhenGaugeMinPadRescueTriggers(t *testing.T) {
+	isolateStatePath(t)
+	forcedColour(t)
+	now := time.Now()
+	for _, layout := range []string{layoutCompact, layoutCompactVertical} {
+		for _, width := range []int{63, 65, 95, 96, 98, 99} {
+			for _, n := range []int{2, 3, 4, 5} {
+				m := newModel(20*time.Second, loadHistory(""))
+				m.width, m.now, m.layout = width, now, layout
+				sources := threeWindowSources(now, n)
+				// Give the first source's weekly window a 100% reading: the
+				// widest possible percentage column, the thing that pushes
+				// the gaugeMinPad rescue into play at these widths.
+				sources[0].snap.Windows[1].Percent = 100
+				m.sources = sources
+				rows := compactRows(m.View())
+				if len(rows) != 3*n {
+					t.Fatalf("%s at width %d, %d sources: found %d gauge rows, want %d",
+						layout, width, n, len(rows), 3*n)
+				}
+				wantOverhead := rows[0].boxWidth - rows[0].barWidth
+				for _, row := range rows[1:] {
+					if row.barStart != rows[0].barStart {
+						t.Errorf("%s at width %d, %d sources: bars start %d and %d cells from their box's left border, want every bar at the same offset",
+							layout, width, n, rows[0].barStart, row.barStart)
+					}
+					if overhead := row.boxWidth - row.barWidth; overhead != wantOverhead {
+						t.Errorf("%s at width %d, %d sources: a %d-wide box leaves %d cells for label+pct+borders but a %d-wide box leaves %d, want the same overhead in every box",
+							layout, width, n, rows[0].boxWidth, wantOverhead, row.boxWidth, overhead)
+					}
 				}
 			}
 		}
