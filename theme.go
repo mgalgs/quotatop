@@ -183,12 +183,12 @@ var themes = []theme{
 // (before the program starts or before the single snapshot frame renders),
 // from model.Update (the t key), and from renderSnapshot (the --theme flag,
 // after which the process exits), and read from View() and its helpers,
-// plus once from newModel at construction, before any Update has run. That is safe because rendering is
-// single-goroutine: Bubble Tea runs Update and View on the same goroutine and
-// nothing inside a tea.Cmd touches a style, and there are no t.Parallel()
-// tests in this repo, so no test can race on it either. A future
-// t.Parallel() test or a rendering goroutine would break this silently; this
-// comment is the only warning a reader will get.
+// plus once from newModel at construction, before any Update has run. That
+// is safe because rendering is single-goroutine: Bubble Tea runs Update and
+// View on the same goroutine and nothing inside a tea.Cmd touches a style,
+// and there are no t.Parallel() tests in this repo, so no test can race on
+// it either. A future t.Parallel() test or a rendering goroutine would break
+// this silently; this comment is the only warning a reader will get.
 var themeIndex = 0
 
 func currentTheme() theme { return themes[themeIndex] }
