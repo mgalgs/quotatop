@@ -463,6 +463,92 @@ func compactForecastHeadline(text string) string {
 	return text
 }
 
+// compactColumns is the pair of column widths -- widest label, widest
+// percentage -- shared by every compact row on screen, so every gauge bar
+// starts and ends at the same column regardless of which panel or window it
+// belongs to. It is computed once, globally, by computeCompactColumns.
+type compactColumns struct {
+	label int
+	pct   int
+}
+
+// compactWindowPercent is the percentage text a compact row prints: a dash
+// for an expired window, matching the value withheld from its gauge.
+func compactWindowPercent(window Window) string {
+	if window.Expired {
+		return "—"
+	}
+	return percentText(window.Percent)
+}
+
+// computeCompactColumns finds the widest label and widest percentage across
+// every window panelCompact will actually draw. It is global across every
+// panel that will be rendered, not per panel: a Codex panel with no "Weekly ·
+// Fable" window must still align its bars with a Claude panel that has one,
+// so the maxima come from every source on screen, not each panel's own
+// windows. A source with no snapshot yet, or one whose snapshot failed,
+// renders no gauge rows and so contributes no window.
+//
+// minContent is the content width (a panel's outer width, minus its
+// borders) of the narrowest panel that will actually be drawn this frame.
+// Both adjustments below are derived from it, once, rather than from each
+// panel's own width: a window's label is server-supplied (see sources.go)
+// and can be arbitrarily long, and two panels that differ by only a cell or
+// two -- rowWidths gives an unevenly-divided grid row's last column
+// whatever the division rounded away -- must still shrink their label
+// column by the same amount, or their bars stop starting at the same offset
+// from their own box.
+func computeCompactColumns(sources []sourceState, minContent int) compactColumns {
+	var cols compactColumns
+	for _, source := range sources {
+		snap := source.snap
+		if snap == nil || snap.Err != nil {
+			continue
+		}
+		for _, window := range snap.Windows {
+			cols.label = max(cols.label, lipgloss.Width(window.Label))
+			cols.pct = max(cols.pct, lipgloss.Width(compactWindowPercent(window)))
+		}
+	}
+	// A single long label -- one source concatenating scope and surface onto
+	// its window label (sources.go) -- must not claim so much of the row that
+	// every panel's bar collapses below gaugeMinPad. Give way only by the
+	// deficit, i.e. only when the label actually leaves the narrowest panel
+	// short of gaugeMinPad, rather than to a fixed fraction of minContent: a
+	// flat fraction cuts into labels even when the bar already has room to
+	// spare, and does not track gaugeMinPad's own threshold anyway. This is
+	// the same rescue compactWindowLine used to compute per panel, moved
+	// here so every panel shrinks its label column by the same amount.
+	//
+	// This only guards gaugeMinPad, the floor a bar needs to read as a bar at
+	// all. gaugeWithForecast's own fit rule is stricter -- it wants the
+	// forecast text plus gaugeMinRun of untouched bar -- and this rescue does
+	// not weigh it: a bar can clear gaugeMinPad and still be too narrow for
+	// the overlay, which then falls back to plain (gaugeWithForecast). That is
+	// an accepted trade, not an oversight -- uniform bar widths across every
+	// panel on screen and the longest bar the narrowest label would allow
+	// cannot both hold -- but it does mean a wide label elsewhere on screen
+	// can silently cost a narrower panel its forecast overlay.
+	if deficit := gaugeMinPad - (minContent - cols.label - cols.pct - 2); deficit > 0 {
+		cols.label -= deficit
+		if cols.label < 0 {
+			cols.label = 0
+		}
+	}
+	return cols
+}
+
+// compactRenderPanel builds the renderPanel closure View uses for a compact
+// layout: compactColumns computed once, globally, from every source that
+// will be drawn and from minContent, the content width of the narrowest
+// panel this frame will actually draw (see computeCompactColumns).
+func compactRenderPanel(sources []sourceState, minContent int) func(int, *Snapshot, *History, time.Time, bool) string {
+	compactCols := computeCompactColumns(sources, minContent)
+	return func(width int, snap *Snapshot, history *History, now time.Time, loading bool) string {
+		return panelCompact(width, snap, history, now, loading, compactCols)
+	}
+}
+
 // compactWindowLine squeezes one window onto a single line: label, percentage
 // and gauge sharing a row. It is the whole of the compact layout's height
 // economy -- no sparkline, no detail line, no blank spacers between windows --
@@ -470,11 +556,22 @@ func compactForecastHeadline(text string) string {
 // percentage (a dash when the window expired), and its bar, which is still
 // the fastest read of which window is red. When the window has a burn
 // projection, the forecast's headline is printed inside the bar itself, the
-// one place a one-line panel has room for it (gaugeWithForecast).
-func compactWindowLine(width int, identity string, window Window, history *History, now time.Time) string {
-	pct, barPct := percentText(window.Percent), window.Percent
+// one place a one-line panel has room for it (gaugeWithForecast) -- provided
+// the bar is wide enough; cols' shared label and percentage columns (see
+// computeCompactColumns) can leave a narrower panel's bar below what
+// gaugeWithForecast's own fit rule needs, in which case it draws plain, with
+// no signal to the caller that the overlay was dropped.
+//
+// label and pct are padded to cols' widths -- computed once, globally, across
+// every window that will be drawn -- rather than to this window's own text,
+// so every bar on screen shares a left and right edge. If the narrowest
+// panel on screen is too narrow for both columns and a gauge of gaugeMinPad
+// cells, cols' label column has already given way to make room (see
+// computeCompactColumns): the percentage is never truncated.
+func compactWindowLine(width int, identity string, window Window, history *History, now time.Time, cols compactColumns) string {
+	pct, barPct := compactWindowPercent(window), window.Percent
 	if window.Expired {
-		pct, barPct = "—", 0
+		barPct = 0
 	}
 	var pctStyled string
 	if window.Expired {
@@ -483,7 +580,15 @@ func compactWindowLine(width int, identity string, window Window, history *Histo
 		pctStyled = lipgloss.NewStyle().Foreground(gradientAt(window.Percent / 100).color()).Bold(true).Render(pct)
 	}
 	label := currentTheme().txt.Render(window.Label)
-	gaugeWidth := width - lipgloss.Width(label) - lipgloss.Width(pct) - 2
+
+	// cols.label and cols.pct are already shrunk, once, to fit the narrowest
+	// panel that will be drawn this frame (see computeCompactColumns), so
+	// every panel uses them as-is rather than deriving its own rescue from
+	// its own width: two panels a cell or two apart would otherwise shrink
+	// by different amounts and their bars would stop sharing a left edge.
+	labelCol, pctCol := cols.label, cols.pct
+
+	gaugeWidth := width - labelCol - pctCol - 2
 	if gaugeWidth < 1 {
 		gaugeWidth = 1
 	}
@@ -497,7 +602,7 @@ func compactWindowLine(width int, identity string, window Window, history *Histo
 			bar = gaugeWithForecast(gaugeWidth, barPct, compactForecastHeadline(text))
 		}
 	}
-	return label + " " + pctStyled + " " + bar
+	return pad(label, labelCol) + " " + padLeft(pctStyled, pctCol) + " " + bar
 }
 
 // panelCompact renders one source with the layout that squeezes everything
@@ -505,7 +610,7 @@ func compactWindowLine(width int, identity string, window Window, history *Histo
 // no blank spacers. Every window's percentage and any blocked or error state
 // still appear -- a compact panel that hides a block is worse than one that
 // does not fit.
-func panelCompact(width int, snap *Snapshot, history *History, now time.Time, loading bool) string {
+func panelCompact(width int, snap *Snapshot, history *History, now time.Time, loading bool, cols compactColumns) string {
 	content := width - 4
 	if snap == nil {
 		return box(width, currentTheme().dim.Render("···"), "",
@@ -527,7 +632,7 @@ func panelCompact(width int, snap *Snapshot, history *History, now time.Time, lo
 		body = append(body, currentTheme().err.Render(truncate(snap.Err.Error(), content)))
 	} else {
 		for _, window := range snap.Windows {
-			body = append(body, compactWindowLine(content, snap.Identity(), window, history, now))
+			body = append(body, compactWindowLine(content, snap.Identity(), window, history, now, cols))
 		}
 		if snap.LimitReached != "" {
 			body = append(body, currentTheme().err.Render(truncate("blocked: "+humanizeReason(snap.LimitReached), content)))
@@ -810,13 +915,16 @@ func (m model) View() string {
 			// Compact reuses the grid's packing arithmetic with its own, smaller
 			// floor; the equal-width rule the trailing row obeys is full-grid
 			// guidance, not a constraint this layout needs.
-			renderPanel, min = panelCompact, compactMinPanel
+			min = compactMinPanel
 		}
 		if isStacked(name) {
 			// One panel per row, at any width: no grid, no side-by-side packing.
 			// The width still clamps to maxLayout like everything else -- a
 			// panel stretched across a very wide terminal reads badly -- but it
 			// is never split. This layout is about stacking, not filling.
+			if isCompact(name) {
+				renderPanel = compactRenderPanel(m.sources, width-4)
+			}
 			for _, source := range m.sources {
 				rows = append(rows, renderPanel(width, source.snap, m.history, m.now, source.loading))
 			}
@@ -829,6 +937,24 @@ func (m model) View() string {
 			// every panel on screen. The trailing row is simply narrower than the
 			// terminal; nothing fills the gap.
 			colWidths := rowWidths(width, cols)
+			if isCompact(name) {
+				// The column widths are computed once here, across every source
+				// that will be drawn, so every bar on screen shares a left and
+				// right edge even across panels -- panelCompact and
+				// compactWindowLine only ever see one panel or one window and
+				// cannot compute this themselves. minContent is derived from
+				// colWidths, the narrowest panel this frame will actually draw,
+				// so a panel a cell or two narrower than its neighbour (rowWidths'
+				// last-column remainder) still shrinks its label column by the
+				// same amount as every other panel.
+				minWidth := colWidths[0]
+				for _, w := range colWidths {
+					if w < minWidth {
+						minWidth = w
+					}
+				}
+				renderPanel = compactRenderPanel(m.sources, minWidth-4)
+			}
 			for start := 0; start < n; start += cols {
 				end := start + cols
 				if end > n {

@@ -298,6 +298,17 @@ func pad(s string, n int) string {
 	return s + strings.Repeat(" ", n-w)
 }
 
+// padLeft left-pads s with spaces to n display cells, right-aligning it. It
+// never truncates: a caller places s in a column already sized to fit it, so
+// the only expected case is w <= n.
+func padLeft(s string, n int) string {
+	w := lipgloss.Width(s)
+	if w >= n {
+		return s
+	}
+	return strings.Repeat(" ", n-w) + s
+}
+
 // truncate cuts a styled string to n display cells. It walks runes and tracks
 // ANSI escapes so colours survive the cut.
 func truncate(s string, n int) string {

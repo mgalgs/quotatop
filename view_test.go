@@ -6,9 +6,11 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/termenv"
@@ -1334,9 +1336,10 @@ func TestPanelCompactWithProjectionIsRectangular(t *testing.T) {
 			{Key: "weekly_all", Label: "Weekly", Percent: 41, Length: 168 * time.Hour, ResetsAt: now.Add(127 * time.Hour)},
 			{Key: "weekly_scoped", Label: "Weekly · Fable", Percent: 12, Length: 168 * time.Hour, ResetsAt: now.Add(127 * time.Hour)},
 		}}
+	cols := computeCompactColumns([]sourceState{{snap: snap}}, 34-4)
 	for _, layout := range []string{layoutCompact, layoutCompactVertical} {
 		for _, width := range []int{34, 46, 66, 132} {
-			everyLineWidth(t, panelCompact(width, snap, history, now, false), width, layout)
+			everyLineWidth(t, panelCompact(width, snap, history, now, false, cols), width, layout)
 		}
 	}
 }
@@ -1356,14 +1359,15 @@ func TestCompactForecastShownOnlyWhenProjected(t *testing.T) {
 	expired.Expired = true
 
 	plain := func(line string) string { return ansiStrip(line) }
+	cols := computeCompactColumns([]sourceState{{snap: &Snapshot{Windows: []Window{withProj, without, expired}}}}, 66)
 
-	if line := compactWindowLine(66, "claude", withProj, history, now); !strings.Contains(plain(line), "full in") {
+	if line := compactWindowLine(66, "claude", withProj, history, now, cols); !strings.Contains(plain(line), "full in") {
 		t.Errorf("window with a projection: bar line = %q, want the forecast headline inside the bar", line)
 	}
-	if line := compactWindowLine(66, "claude", without, history, now); strings.Contains(plain(line), "full in") || strings.Contains(plain(line), "at reset") || strings.Contains(plain(line), "steady") {
+	if line := compactWindowLine(66, "claude", without, history, now, cols); strings.Contains(plain(line), "full in") || strings.Contains(plain(line), "at reset") || strings.Contains(plain(line), "steady") {
 		t.Errorf("window without a projection: bar line = %q, want no forecast text", line)
 	}
-	if line := compactWindowLine(66, "claude", expired, history, now); !strings.Contains(plain(line), "—") || strings.Contains(plain(line), "full in") {
+	if line := compactWindowLine(66, "claude", expired, history, now, cols); !strings.Contains(plain(line), "—") || strings.Contains(plain(line), "full in") {
 		t.Errorf("expired window: bar line = %q, want a dash and no forecast", line)
 	}
 }
@@ -1380,16 +1384,17 @@ func TestCompactForecastOverlayInEveryTheme(t *testing.T) {
 	snap := &Snapshot{Source: "claude", Title: "CLAUDE", Observed: now,
 		Windows: []Window{{Key: "weekly_all", Label: "Weekly", Percent: 41,
 			Length: 168 * time.Hour, ResetsAt: now.Add(127 * time.Hour)}}}
+	cols := computeCompactColumns([]sourceState{{snap: snap}}, 66-4)
 	for i := range themes {
 		setThemeIndex(t, i)
 		width := 66
-		panel := panelCompact(width, snap, history, now, false)
+		panel := panelCompact(width, snap, history, now, false, cols)
 		everyLineWidth(t, panel, width, themes[i].name)
 		line := strings.Split(panel, "\n")[1]
 		if !strings.Contains(ansiStrip(line), "full in") {
 			t.Errorf("theme %d (%s): overlay text missing from the bar line", i, themes[i].name)
 		}
-		gaugeWidth := width - 4 - 6 - 3 - 2 // content minus label, percentage and the two separators
+		gaugeWidth := (width - 4) - cols.label - cols.pct - 2 // content minus label, percentage and the two separators
 		if got := lipgloss.Width(gaugeWithForecast(gaugeWidth, 41, "full in 2d 11h")); got != gaugeWidth {
 			t.Errorf("theme %d: overlaid bar width = %d, want %d", i, got, gaugeWidth)
 		}
@@ -1440,13 +1445,14 @@ func TestCompactForecastFitRuleAtPanelWidth(t *testing.T) {
 		Length: 168 * time.Hour, ResetsAt: now.Add(127 * time.Hour)}
 	without := withProj
 	without.Length = 0
+	cols := computeCompactColumns([]sourceState{{snap: &Snapshot{Windows: []Window{withProj, without}}}}, 66)
 
 	// gauge width at panel width W is W-11; the 14-cell forecast needs 22.
-	if got, want := compactWindowLine(31, "claude", withProj, history, now),
-		compactWindowLine(31, "claude", without, history, now); got != want {
+	if got, want := compactWindowLine(31, "claude", withProj, history, now, cols),
+		compactWindowLine(31, "claude", without, history, now, cols); got != want {
 		t.Errorf("at the narrow width the bar should be plain and identical:\ngot:  %q\nwant: %q", got, want)
 	}
-	if line := compactWindowLine(33, "claude", withProj, history, now); !strings.Contains(ansiStrip(line), "full in") {
+	if line := compactWindowLine(33, "claude", withProj, history, now, cols); !strings.Contains(ansiStrip(line), "full in") {
 		t.Errorf("just above the fit boundary the forecast should appear: %q", line)
 	}
 }
@@ -1505,6 +1511,385 @@ func TestCompactForecastFixtures(t *testing.T) {
 			}
 			if got != string(want) {
 				t.Errorf("%s differs from the current render:\n--- got ---\n%s--- want ---\n%s", file, got, string(want))
+			}
+		}
+	}
+}
+
+// --- Compact bar alignment --------------------------------------------------
+//
+// Before this round each compact row sized its gauge from its own label and
+// percentage, so bars of different lengths started at different columns --
+// impossible to compare by eye, the one thing this screen exists to do. The
+// tests below check the fix at the level a person actually reads the screen:
+// the rendered frame, not the arithmetic that produced it.
+
+// isGaugeGlyph reports whether r is one of the block characters a gauge bar
+// is drawn from: the full/empty blocks and the eighth-cell partial blocks.
+// Nothing else in a compact row -- a label, a percentage, box-drawing
+// borders -- uses these glyphs, so a run of them identifies a bar without
+// needing to know how the row was built.
+func isGaugeGlyph(r rune) bool {
+	if r == '█' || r == '░' {
+		return true
+	}
+	for _, p := range partialRunes {
+		if r == p {
+			return true
+		}
+	}
+	return false
+}
+
+// compactRow is one parsed gauge row from a rendered compact frame: where its
+// label starts, where its percentage text ends, and where its bar starts and
+// how wide it is. labelStart, pctEnd and barStart are display-cell columns
+// counted from the row's own panel box's left border ("│"), not from the
+// start of the physical line -- the side-by-side "compact" layout can draw
+// several boxes on one line (see parseCompactRowsInLine), and a box's
+// absolute column on that line depends only on which grid slot it landed in,
+// not on anything this round controls. boxWidth is that box's own total
+// rendered width (border to border), which callers need to tell a
+// legitimate width difference (two boxes of different size, e.g. the
+// trailing column of an unevenly-divided grid row) from a real
+// misalignment.
+type compactRow struct {
+	labelStart, pctEnd, barStart, barWidth, boxWidth int
+}
+
+var compactPctRe = regexp.MustCompile(`\d+(?:\.\d+)?%|—`)
+
+// lineBoxOrigins finds every panel box drawn on one line of runes, in
+// left-to-right order, from the "│" pair box() draws at each box's left and
+// right edge. A compact-grid row joins several boxes onto the same physical
+// line (see parseCompactRowsInLine's own doc comment), so a body line
+// carries one such pair per box, never an unpaired "│" -- box() is the only
+// place in the rendered frame that emits the glyph.
+func lineBoxOrigins(runes []rune) []struct{ origin, width int } {
+	var bars []int
+	for i, r := range runes {
+		if r == '│' {
+			bars = append(bars, i)
+		}
+	}
+	var boxes []struct{ origin, width int }
+	for i := 0; i+1 < len(bars); i += 2 {
+		boxes = append(boxes, struct{ origin, width int }{bars[i], bars[i+1] - bars[i] + 1})
+	}
+	return boxes
+}
+
+// parseCompactRow reads one line of a rendered frame as a compact gauge row.
+// A line can carry more than one bar: the side-by-side "compact" layout
+// joins a whole row of panels onto the same physical output line, so a
+// panel's own row sits next to its neighbour's on that line, not below it.
+// parseCompactRowsInLine finds every run of gauge glyphs on the line -- each
+// is a separate bar -- and, for each, the nearest percentage token that
+// precedes it and follows the previous bar (so one panel's percentage is
+// never mistaken for another's). A burn-forecast overlay replaces a bar's
+// glyphs with text, so this parser cannot see a bar through an overlay --
+// callers that check alignment use windows with no projection, which is what
+// checking alignment needs anyway.
+func parseCompactRowsInLine(line string) []compactRow {
+	runes := []rune(ansiStrip(line))
+	boxes := lineBoxOrigins(runes)
+	boxFor := func(col int) (origin, width int) {
+		for i := len(boxes) - 1; i >= 0; i-- {
+			if boxes[i].origin <= col {
+				return boxes[i].origin, boxes[i].width
+			}
+		}
+		return 0, 0
+	}
+
+	type run struct{ start, width int }
+	var runs []run
+	curStart, cur := -1, 0
+	flush := func() {
+		if cur > 0 {
+			runs = append(runs, run{curStart, cur})
+		}
+		curStart, cur = -1, 0
+	}
+	for i, r := range runes {
+		if isGaugeGlyph(r) {
+			if curStart < 0 {
+				curStart = i
+			}
+			cur++
+			continue
+		}
+		flush()
+	}
+	flush()
+
+	var rows []compactRow
+	segStart := 0
+	for _, bar := range runs {
+		rowStart := segStart
+		prefix := string(runes[rowStart:bar.start])
+		matches := compactPctRe.FindAllStringIndex(prefix, -1)
+		segStart = bar.start + bar.width
+		if len(matches) == 0 {
+			continue // a glyph run with no percentage before it is not a gauge row
+		}
+		last := matches[len(matches)-1]
+		labelStart := rowStart
+		for labelStart < bar.start && (runes[labelStart] == ' ' || runes[labelStart] == '│') {
+			labelStart++
+		}
+		// last[1] is a byte offset into prefix (regexp indices are always
+		// byte offsets), but every other position here is a rune index into
+		// runes -- prefix contains multi-byte runes (the box border │, the
+		// · in "Weekly · Fable", the — of an expired window), so a caller
+		// that mixed the two would overshoot by the extra bytes those
+		// characters contribute. Re-count in runes to stay consistent.
+		pctEnd := rowStart + utf8.RuneCountInString(prefix[:last[1]])
+		origin, width := boxFor(bar.start)
+		rows = append(rows, compactRow{
+			labelStart: labelStart - origin,
+			pctEnd:     pctEnd - origin,
+			barStart:   bar.start - origin,
+			barWidth:   bar.width,
+			boxWidth:   width,
+		})
+	}
+	return rows
+}
+
+// compactRows parses every gauge row out of a rendered frame, in the order
+// they appear.
+func compactRows(frame string) []compactRow {
+	var rows []compactRow
+	for _, line := range strings.Split(frame, "\n") {
+		rows = append(rows, parseCompactRowsInLine(line)...)
+	}
+	return rows
+}
+
+// TestCompactBarsShareOneColumn is the core acceptance test: every bar in a
+// rendered compact frame must start at the same column relative to its own
+// panel box, across every window and every panel on the screen. A bar's
+// absolute column on the physical line is not part of that claim: the
+// side-by-side "compact" layout can draw more than one box on one line (see
+// parseCompactRowsInLine), and a box's absolute position is fixed by which
+// grid slot it landed in -- geometry this round does not touch, not
+// something label/percentage alignment could ever equalise. Likewise, two
+// boxes are not guaranteed the same outer width -- rowWidths gives an
+// unevenly-divided grid row's last column whatever the division rounded
+// away (see rowWidths' own doc comment; pre-existing, unrelated to this
+// round) -- so a bar's width is only required to be consistent with its own
+// box's width, not identical in every box. What must hold everywhere is:
+// boxWidth-minus-barWidth is the same constant (the label/percentage
+// columns plus borders and separators, all shared globally) in every row,
+// and a bar starts at the same offset from its own box's left border in
+// every row.
+func TestCompactBarsShareOneColumn(t *testing.T) {
+	isolateStatePath(t)
+	forcedColour(t)
+	now := time.Now()
+	for _, layout := range []string{layoutCompact, layoutCompactVertical} {
+		for _, width := range []int{60, 80, 100, 132} {
+			m := newModel(20*time.Second, loadHistory(""))
+			m.width, m.now, m.layout = width, now, layout
+			m.sources = threeWindowSources(now, 3)
+			rows := compactRows(m.View())
+			if len(rows) != 9 {
+				t.Fatalf("%s at width %d: found %d gauge rows, want 9 (3 sources x 3 windows) -- a bar the parser cannot see through must fail loud, not shrink the rows this test checks",
+					layout, width, len(rows))
+			}
+			wantOverhead := rows[0].boxWidth - rows[0].barWidth
+			for _, row := range rows[1:] {
+				if row.barStart != rows[0].barStart {
+					t.Errorf("%s at width %d: bars start %d and %d cells from their box's left border, want every bar at the same offset",
+						layout, width, rows[0].barStart, row.barStart)
+				}
+				if overhead := row.boxWidth - row.barWidth; overhead != wantOverhead {
+					t.Errorf("%s at width %d: a %d-wide box leaves %d cells for label+pct+borders but a %d-wide box leaves %d, want the same overhead in every box",
+						layout, width, rows[0].boxWidth, wantOverhead, row.boxWidth, overhead)
+				}
+			}
+		}
+	}
+}
+
+// The gaugeMinPad rescue -- the label column giving way when a panel is too
+// narrow to keep a gaugeMinPad-wide bar -- must be derived once, from the
+// narrowest panel that will be drawn, not recomputed by each panel from its
+// own width. rowWidths gives an unevenly-divided grid row's last column
+// whatever the division rounded away, so two panels in the same row can be a
+// cell or two apart; a 100%-percentage window (a 4-cell percentage column,
+// wider than every other reading) narrows the room left for the gauge
+// enough that this rescue actually triggers, which TestCompactBarsShareOneColumn's
+// 2-3 cell percentages never do. If the rescue used each panel's own width,
+// the narrower and wider panels in a row would shrink their label columns by
+// different amounts and their bars would stop starting at the same offset
+// from their own box.
+func TestCompactBarsShareOneColumnWhenGaugeMinPadRescueTriggers(t *testing.T) {
+	isolateStatePath(t)
+	forcedColour(t)
+	now := time.Now()
+	for _, layout := range []string{layoutCompact, layoutCompactVertical} {
+		for _, width := range []int{63, 65, 95, 96, 98, 99} {
+			for _, n := range []int{2, 3, 4, 5} {
+				m := newModel(20*time.Second, loadHistory(""))
+				m.width, m.now, m.layout = width, now, layout
+				sources := threeWindowSources(now, n)
+				// Give the first source's weekly window a 100% reading: the
+				// widest possible percentage column, the thing that pushes
+				// the gaugeMinPad rescue into play at these widths.
+				sources[0].snap.Windows[1].Percent = 100
+				m.sources = sources
+				rows := compactRows(m.View())
+				if len(rows) != 3*n {
+					t.Fatalf("%s at width %d, %d sources: found %d gauge rows, want %d",
+						layout, width, n, len(rows), 3*n)
+				}
+				wantOverhead := rows[0].boxWidth - rows[0].barWidth
+				for _, row := range rows[1:] {
+					if row.barStart != rows[0].barStart {
+						t.Errorf("%s at width %d, %d sources: bars start %d and %d cells from their box's left border, want every bar at the same offset",
+							layout, width, n, rows[0].barStart, row.barStart)
+					}
+					if overhead := row.boxWidth - row.barWidth; overhead != wantOverhead {
+						t.Errorf("%s at width %d, %d sources: a %d-wide box leaves %d cells for label+pct+borders but a %d-wide box leaves %d, want the same overhead in every box",
+							layout, width, n, rows[0].boxWidth, wantOverhead, row.boxWidth, overhead)
+					}
+				}
+			}
+		}
+	}
+}
+
+// A panel whose own longest label is shorter than another panel's (Codex has
+// no "Weekly · Fable" window the way Claude does) must not narrow its bars'
+// shared column: the alignment is global across every panel on screen, not
+// computed per panel.
+func TestCompactBarsAlignAcrossPanelsWithDifferentLabels(t *testing.T) {
+	isolateStatePath(t)
+	forcedColour(t)
+	now := time.Now()
+	claude := &Snapshot{Source: "claude", Title: "CLAUDE", Observed: now, Windows: []Window{
+		{Key: "session", Label: "5-hour", Percent: 0, ResetsAt: now.Add(time.Hour)},
+		{Key: "weekly_all", Label: "Weekly", Percent: 30, ResetsAt: now.Add(time.Hour)},
+		{Key: "weekly_scoped", Label: "Weekly · Fable", Percent: 18, ResetsAt: now.Add(time.Hour)},
+	}}
+	codex := &Snapshot{Source: "codex", Title: "CODEX", Observed: now, Windows: []Window{
+		{Key: "session", Label: "5-hour", Percent: 0, ResetsAt: now.Add(time.Hour)},
+		{Key: "weekly_all", Label: "Weekly", Percent: 67, ResetsAt: now.Add(time.Hour)},
+	}}
+	for _, layout := range []string{layoutCompact, layoutCompactVertical} {
+		m := newModel(20*time.Second, loadHistory(""))
+		m.width, m.now, m.layout = 100, now, layout
+		m.sources = []sourceState{{snap: claude}, {snap: codex}}
+		rows := compactRows(m.View())
+		if len(rows) != 5 {
+			t.Fatalf("%s: found %d gauge rows, want 5", layout, len(rows))
+		}
+		// Claude's and Codex's boxes are the same width here (an even split of
+		// width 100 either way this splits across the two layouts), so unlike
+		// TestCompactBarsShareOneColumn's width-132 case this can assert the
+		// bars themselves match, not just the box-relative overhead -- which is
+		// the stronger check this test exists for: Codex's shorter longest
+		// label must not have narrowed Codex's own columns.
+		for _, row := range rows[1:] {
+			if row.boxWidth != rows[0].boxWidth {
+				t.Fatalf("%s: boxes are %d and %d cells wide, want the same width so this test can compare bars directly",
+					layout, rows[0].boxWidth, row.boxWidth)
+			}
+			if row.barStart != rows[0].barStart || row.barWidth != rows[0].barWidth {
+				t.Errorf("%s: bar at column %d width %d, want column %d width %d like every other bar "+
+					"(a panel with a shorter longest label must not narrow the shared column)",
+					layout, row.barStart, row.barWidth, rows[0].barStart, rows[0].barWidth)
+			}
+		}
+	}
+}
+
+// Within a panel, every label must start in the same column (left-aligned)
+// and every percentage must end in the same column just before the bar
+// (right-aligned), regardless of how the label or percentage text itself
+// varies in length.
+func TestCompactLabelLeftPctRightAligned(t *testing.T) {
+	isolateStatePath(t)
+	forcedColour(t)
+	now := time.Now()
+	snap := &Snapshot{Source: "claude", Title: "S0", Observed: now, Windows: []Window{
+		{Key: "session", Label: "5-hour", Percent: 3, ResetsAt: now.Add(time.Hour)},
+		{Key: "weekly_all", Label: "Weekly", Percent: 45, ResetsAt: now.Add(time.Hour)},
+		{Key: "weekly_scoped", Label: "Weekly · Fable", Percent: 100, ResetsAt: now.Add(time.Hour)},
+		{Key: "extra", Label: "Extra", Percent: 20, Expired: true},
+	}}
+	for _, layout := range []string{layoutCompact, layoutCompactVertical} {
+		m := newModel(20*time.Second, loadHistory(""))
+		m.width, m.now, m.layout = 100, now, layout
+		m.sources = []sourceState{{snap: snap}}
+		rows := compactRows(m.View())
+		if len(rows) != 4 {
+			t.Fatalf("%s: found %d gauge rows, want 4", layout, len(rows))
+		}
+		for _, row := range rows[1:] {
+			if row.labelStart != rows[0].labelStart {
+				t.Errorf("%s: labels start at columns %d and %d, want every label left-aligned to the same column",
+					layout, rows[0].labelStart, row.labelStart)
+			}
+			if row.pctEnd != rows[0].pctEnd {
+				t.Errorf("%s: percentages end at columns %d and %d, want every percentage right-aligned to the same column",
+					layout, rows[0].pctEnd, row.pctEnd)
+			}
+		}
+	}
+}
+
+// At the narrowest width a compact panel is allowed to get, the gauge must
+// keep at least gaugeMinPad cells by truncating the label rather than
+// collapsing the bar.
+func TestCompactNarrowWidthKeepsGaugeMinimumByTruncatingLabel(t *testing.T) {
+	isolateStatePath(t)
+	forcedColour(t)
+	now := time.Now()
+	snap := &Snapshot{Source: "claude", Title: "CLAUDE", Observed: now, Windows: []Window{
+		{Key: "weekly_scoped", Label: "Weekly · Fable", Percent: 18, ResetsAt: now.Add(time.Hour)},
+	}}
+	for _, layout := range []string{layoutCompact, layoutCompactVertical} {
+		m := newModel(20*time.Second, loadHistory(""))
+		m.width, m.now, m.layout = compactMinPanel, now, layout
+		m.sources = []sourceState{{snap: snap}}
+		view := m.View()
+		rows := compactRows(view)
+		if len(rows) != 1 {
+			t.Fatalf("%s: found %d gauge rows, want 1", layout, len(rows))
+		}
+		if rows[0].barWidth < gaugeMinPad {
+			t.Errorf("%s: bar is %d cells wide at the narrowest panel width, want at least %d",
+				layout, rows[0].barWidth, gaugeMinPad)
+		}
+		if strings.Contains(ansiStrip(view), "Weekly · Fable") {
+			t.Errorf("%s: label was not truncated at the narrowest width even though the gauge needed the room:\n%s",
+				layout, view)
+		}
+	}
+}
+
+// At widths comfortable enough that the bar does not need the room, the full
+// label must survive intact -- a label column sized off a fixed fraction of
+// the panel, rather than off how much the bar actually needs, can cut into
+// labels even when there is plenty of space left over for the bar.
+func TestCompactComfortableWidthKeepsFullLabel(t *testing.T) {
+	isolateStatePath(t)
+	forcedColour(t)
+	now := time.Now()
+	for _, layout := range []string{layoutCompact, layoutCompactVertical} {
+		for _, width := range []int{100, 132} {
+			for _, n := range []int{3, 4} {
+				m := newModel(20*time.Second, loadHistory(""))
+				m.width, m.now, m.layout = width, now, layout
+				m.sources = threeWindowSources(now, n)
+				view := ansiStrip(m.View())
+				if !strings.Contains(view, "Weekly · Fable") {
+					t.Errorf("%s at width %d, %d sources: \"Weekly · Fable\" label was cut even though the panel has room for it:\n%s",
+						layout, width, n, view)
+				}
 			}
 		}
 	}
