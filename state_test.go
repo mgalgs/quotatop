@@ -272,3 +272,51 @@ func TestJSONDoesNotCreateStateFile(t *testing.T) {
 		t.Errorf("--json created the state file: %v", err)
 	}
 }
+
+// Pressing t persists the new theme index (with the current layout riding
+// along), so a process killed immediately after still does not take the
+// choice with it. The first assertion differs from the defaults a missing
+// file would load, which is what proves the file was written.
+func TestTKeyPersistsTheNewTheme(t *testing.T) {
+	path := isolateStatePath(t)
+	isolateAccountEnv(t)
+	defer func(prev int) { themeIndex = prev }(themeIndex)
+
+	m := newModel(time.Second, loadHistory(""))
+	updated, _ := m.Update(key("t"))
+	m = updated.(model)
+	if got := loadState(path); got != wantState(1, layoutFull) {
+		t.Errorf("after one press of t: state = %+v, want %+v", got, wantState(1, layoutFull))
+	}
+
+	m.layout = layoutCompact
+	for i := 0; i < 2; i++ {
+		updated, _ = m.Update(key("t"))
+		m = updated.(model)
+	}
+	if got := loadState(path); got != wantState(3, layoutCompact) {
+		t.Errorf("after three presses of t: state = %+v, want %+v", got, wantState(3, layoutCompact))
+	}
+}
+
+// Pressing l persists the new layout name and leaves the persisted theme
+// untouched.
+func TestLKeyPersistsTheNewLayout(t *testing.T) {
+	path := isolateStatePath(t)
+	isolateAccountEnv(t)
+	defer func(prev int) { themeIndex = prev }(themeIndex)
+
+	m := newModel(time.Second, loadHistory(""))
+	updated, _ := m.Update(key("l"))
+	m = updated.(model)
+	if got := loadState(path); got != wantState(0, layouts[1]) {
+		t.Errorf("after one press of l: state = %+v, want %+v", got, wantState(0, layouts[1]))
+	}
+
+	themeIndex = 4
+	updated, _ = m.Update(key("l"))
+	m = updated.(model)
+	if got := loadState(path); got != wantState(4, layouts[2]) {
+		t.Errorf("after the second press of l: state = %+v, want %+v", got, wantState(4, layouts[2]))
+	}
+}

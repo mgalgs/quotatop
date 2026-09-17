@@ -213,16 +213,21 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.refresh(true)
 		case "l":
 			// Cycle layouts, wrapping at the end. One key, cycle, wrap: there
-			// is no layout menu, and the choice is not persisted across runs.
+			// is no layout menu. The choice is persisted immediately -- on
+			// the keypress, not on exit -- because a TUI that is killed never
+			// runs an exit path, and the user should not lose the choice they
+			// just made. A failed save is silent: the cycle still happens.
 			m.cycleLayout()
+			saveState(statePath(), uiState{Theme: themeIndex, Layout: m.layoutName()})
 			return m, nil
 		case "t":
 			// Cycle themes, wrapping at the end. Like the layout: one key,
-			// cycle, wrap; not persisted, and the current theme is never
-			// named in the UI. The spinner is styled from the theme too, so it
-			// follows the switch.
+			// cycle, wrap, persisted on the keypress. The current theme is
+			// never named in the UI. The spinner is styled from the theme
+			// too, so it follows the switch.
 			cycleTheme()
 			m.spinner.Style = currentTheme().key
+			saveState(statePath(), uiState{Theme: themeIndex, Layout: m.layoutName()})
 			return m, nil
 		case "?":
 			m.showHelp = !m.showHelp

@@ -11,6 +11,7 @@ import (
 func key(s string) tea.KeyMsg { return tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)} }
 
 func TestQuitKeysReturnQuit(t *testing.T) {
+	isolateStatePath(t)
 	isolateAccountEnv(t)
 	for _, msg := range []tea.KeyMsg{key("q"), {Type: tea.KeyEsc}, {Type: tea.KeyCtrlC}} {
 		_, cmd := newModel(time.Second, loadHistory("")).Update(msg)
@@ -24,6 +25,7 @@ func TestQuitKeysReturnQuit(t *testing.T) {
 }
 
 func TestQuestionMarkTogglesHelp(t *testing.T) {
+	isolateStatePath(t)
 	isolateAccountEnv(t)
 	updated, _ := newModel(time.Second, loadHistory("")).Update(key("?"))
 	if !updated.(model).showHelp {
@@ -40,6 +42,7 @@ func TestQuestionMarkTogglesHelp(t *testing.T) {
 // this test instead of breaking it. The zero-value model starts on the
 // default, layouts[0].
 func TestLayoutKeyCyclesAndWraps(t *testing.T) {
+	isolateStatePath(t)
 	isolateAccountEnv(t)
 	m := newModel(time.Second, loadHistory(""))
 	// Two full laps plus one, so the wrap is exercised rather than assumed.
@@ -64,6 +67,7 @@ func TestLayoutKeyCyclesAndWraps(t *testing.T) {
 // len(themes) times lands back where it started, and like l it starts no
 // fetch.
 func TestThemeKeyCyclesAndWraps(t *testing.T) {
+	isolateStatePath(t)
 	isolateAccountEnv(t)
 	defer func(prev int) { themeIndex = prev }(themeIndex)
 	m := newModel(time.Second, loadHistory(""))
@@ -82,6 +86,7 @@ func TestThemeKeyCyclesAndWraps(t *testing.T) {
 // The footer must name the layout the user just switched to, and hint at the
 // key; the default stays unannounced so full's footer keeps today's content.
 func TestFooterNamesTheCurrentLayout(t *testing.T) {
+	isolateStatePath(t)
 	isolateAccountEnv(t)
 	now := time.Now()
 	m := newModel(time.Second, loadHistory(""))
@@ -105,6 +110,7 @@ func TestFooterNamesTheCurrentLayout(t *testing.T) {
 }
 
 func TestHelpBodyListsTheLayoutKey(t *testing.T) {
+	isolateStatePath(t)
 	isolateAccountEnv(t)
 	m := newModel(time.Second, loadHistory(""))
 	m.now = time.Now()
@@ -117,6 +123,7 @@ func TestHelpBodyListsTheLayoutKey(t *testing.T) {
 // The model starts in the loading state because Init fires both fetches. A tick
 // arriving before those land must not start a second pair.
 func TestPollingDoesNotDoubleFetch(t *testing.T) {
+	isolateStatePath(t)
 	isolateAccountEnv(t)
 	m := newModel(20*time.Second, loadHistory(""))
 	if !m.sources[0].loading || !m.sources[1].loading {
@@ -155,6 +162,7 @@ func TestPollingDoesNotDoubleFetch(t *testing.T) {
 // same Source string (a future round's two Claude accounts) must still land
 // in the slot the message names, and every other slot must stay untouched.
 func TestSnapshotMsgRoutesByIndexNotSource(t *testing.T) {
+	isolateStatePath(t)
 	isolateAccountEnv(t)
 	m := newModel(20*time.Second, loadHistory(""))
 	m.sources = []sourceState{
@@ -181,6 +189,7 @@ func TestSnapshotMsgRoutesByIndexNotSource(t *testing.T) {
 // A message naming a slot that does not exist must be ignored, not panic --
 // this path will grow more senders as more sources are added.
 func TestSnapshotMsgOutOfRangeIndexIsIgnored(t *testing.T) {
+	isolateStatePath(t)
 	isolateAccountEnv(t)
 	m := newModel(20*time.Second, loadHistory(""))
 	before := append([]sourceState(nil), m.sources...)
@@ -200,6 +209,7 @@ func TestSnapshotMsgOutOfRangeIndexIsIgnored(t *testing.T) {
 }
 
 func TestNextRefreshWithNoSourcesReturnsFutureTime(t *testing.T) {
+	isolateStatePath(t)
 	isolateAccountEnv(t)
 	m := newModel(20*time.Second, loadHistory(""))
 	m.now = time.Now()
@@ -214,6 +224,7 @@ func TestNextRefreshWithNoSourcesReturnsFutureTime(t *testing.T) {
 }
 
 func TestSpinnerTicksAreDroppedWhenIdle(t *testing.T) {
+	isolateStatePath(t)
 	isolateAccountEnv(t)
 	m := newModel(time.Second, loadHistory(""))
 	m.sources[0].loading, m.sources[1].loading = false, false
@@ -225,6 +236,7 @@ func TestSpinnerTicksAreDroppedWhenIdle(t *testing.T) {
 // The longest key list is exactly as wide as the column it sat in, so it used
 // to run straight into its description.
 func TestHelpRowsKeepAGapAfterTheKeyList(t *testing.T) {
+	isolateStatePath(t)
 	isolateAccountEnv(t)
 	m := newModel(time.Second, loadHistory(""))
 	m.width, m.now, m.showHelp = 100, time.Now(), true

@@ -60,6 +60,7 @@ func forcedColour(t *testing.T) {
 // deliberate difference, and this test asserts everything else is still
 // byte-identical.
 func TestThemeZeroMatchesPreChangeFixture(t *testing.T) {
+	isolateStatePath(t)
 	isolateAccountEnv(t)
 	forcedColour(t)
 	for _, tc := range []struct {
@@ -180,6 +181,7 @@ func TestThemesAreComplete(t *testing.T) {
 // theme that was declared but never wired up. The fixture model renders every
 // part of the screen, so an unwired style would not show up.
 func TestEveryThemeDiffersFromThemeZero(t *testing.T) {
+	isolateStatePath(t)
 	isolateAccountEnv(t)
 	forcedColour(t)
 	baseline := themeFixtureModel(false).View()
@@ -206,6 +208,7 @@ func plainFrame(s string) string { return reClock.ReplaceAllString(ansiStrip(s),
 // The footer and the ? help name the key but not any theme: cycling is
 // announced, the current scheme is not.
 func TestFooterAndHelpHintAtThemeKey(t *testing.T) {
+	isolateStatePath(t)
 	isolateAccountEnv(t)
 	if plain := ansiStrip(themeFixtureModel(false).View()); !strings.Contains(plain, "t themes") {
 		t.Errorf("footer does not hint that t cycles themes: %q", plain)
@@ -226,6 +229,7 @@ func TestFooterAndHelpHintAtThemeKey(t *testing.T) {
 // Pressing t len(themes) times renders byte-identically to never having
 // pressed it at all: the cycle wraps back to the start.
 func TestCyclingAllThemesRendersSameAsStart(t *testing.T) {
+	isolateStatePath(t)
 	isolateAccountEnv(t)
 	forcedColour(t)
 	m := themeFixtureModel(false)
@@ -247,6 +251,7 @@ func TestCyclingAllThemesRendersSameAsStart(t *testing.T) {
 // requested scheme (different colouring, identical plain content), and an
 // out-of-range index fails loudly rather than clamping or wrapping.
 func TestRenderSnapshotHonoursThemeFlag(t *testing.T) {
+	isolateStatePath(t)
 	isolateAccountEnv(t)
 	t.Setenv("NO_COLOR", "")
 	t.Setenv("CLICOLOR_FORCE", "1")
@@ -287,6 +292,7 @@ func TestRenderSnapshotHonoursThemeFlag(t *testing.T) {
 // range, the same way a test that asks for a theme that does not exist must
 // fail loudly.
 func TestSnapshotFlagRejectsOutOfRangeTheme(t *testing.T) {
+	isolateStatePath(t)
 	bin := filepath.Join(t.TempDir(), "quotatop")
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
