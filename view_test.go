@@ -1450,3 +1450,62 @@ func TestCompactForecastFitRuleAtPanelWidth(t *testing.T) {
 		t.Errorf("just above the fit boundary the forecast should appear: %q", line)
 	}
 }
+
+// compactForecastFixtureModel is the deterministic construction the
+// testdata/themes/ fixtures use (fixed clock, host and readings, no
+// machine-specific data), pointed at the compact layouts and with two
+// windows that carry burn projections, so the forecast overlay renders.
+func compactForecastFixtureModel(layout string) model {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	m := newModel(20*time.Second, loadHistory(""))
+	m.host = "sandbox"
+	m.now = now
+	m.height = 0
+	m.layout = layout
+	claude := demoSnapshot(now)
+	claude.Windows[1] = Window{Key: "weekly_all", Label: "Weekly", Percent: 41,
+		Length: 168 * time.Hour, ResetsAt: now.Add(127 * time.Hour)} // full in 2d 11h, urgent
+	claude.Windows[2] = Window{Key: "weekly_scoped", Label: "Weekly · Fable", Percent: 12,
+		Length: 168 * time.Hour, ResetsAt: now.Add(127 * time.Hour)} // ~49% at reset
+	codex := &Snapshot{
+		Source: "codex", Title: "CODEX", Verb: "scanned", Footnote: "session logs",
+		Observed: now.Add(-30 * time.Second), At: now,
+		Err: errors.New("no session logs found in any codex root"),
+	}
+	m.sources = []sourceState{
+		{fetch: func(bool) Snapshot { return *claude }, snap: claude, due: now.Add(-time.Hour)},
+		{fetch: func(bool) Snapshot { return *codex }, snap: codex, due: now.Add(-time.Hour)},
+	}
+	return m
+}
+
+// The captures in testdata/compact-forecast/ show the forecast overlay in the
+// compact layouts with colour forced on, for the reviewer to look at in a
+// colour terminal. Regenerate them with:
+//
+//	QUOTATOP_UPDATE_COMPACT_FIXTURES=1 go test -run TestCompactForecastFixtures .
+func TestCompactForecastFixtures(t *testing.T) {
+	isolateStatePath(t)
+	forcedColour(t)
+	for _, layout := range []string{layoutCompact, layoutCompactVertical} {
+		for _, width := range []int{80, 132} {
+			file := fmt.Sprintf("testdata/compact-forecast/%s-%d.txt", layout, width)
+			m := compactForecastFixtureModel(layout)
+			m.width = width
+			got := m.View() + "\n"
+			if os.Getenv("QUOTATOP_UPDATE_COMPACT_FIXTURES") == "1" {
+				if err := os.WriteFile(file, []byte(got), 0o644); err != nil {
+					t.Fatalf("writing %s: %v", file, err)
+				}
+				continue
+			}
+			want, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatalf("reading %s: %v", file, err)
+			}
+			if got != string(want) {
+				t.Errorf("%s differs from the current render:\n--- got ---\n%s--- want ---\n%s", file, got, string(want))
+			}
+		}
+	}
+}
