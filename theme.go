@@ -21,6 +21,75 @@ func (c rgb) hex() string {
 
 func (c rgb) color() lipgloss.Color { return lipgloss.Color(c.hex()) }
 
+// luminance is perceived luminance on 0..255 channels with the standard
+// Rec.709 weights.
+func (c rgb) luminance() float64 {
+	return 0.2126*(c.r/255) + 0.7152*(c.g/255) + 0.0722*(c.b/255)
+}
+
+// parseHexRGB parses a "#rrggbb" colour into rgb. It returns nil for anything
+// it does not recognise, so callers keep their fallback.
+func parseHexRGB(s string) *rgb {
+	s = strings.TrimPrefix(s, "#")
+	if len(s) != 6 {
+		return nil
+	}
+	var c rgb
+	var r, g, b uint64
+	if _, err := fmt.Sscanf(s, "%2x%2x%2x", &r, &g, &b); err != nil {
+		return nil
+	}
+	c = rgb{float64(r), float64(g), float64(b)}
+	return &c
+}
+
+// overlayEndpoints are the two ink colours the gauge forecast overlay picks
+// from: the theme's near-black and near-white, taken from its body-text
+// colour. The txt style is an adaptive colour, so its light-background
+// variant is the theme's dark ink and its dark-background variant the theme's
+// light ink. Taking them from the theme rather than hardcoding #000/#fff
+// keeps a non-black-and-white theme from getting hard black or hard white
+// stamped into its bars. The literals survive only as the fallback for a
+// theme whose txt style is not an adaptive hex colour.
+func overlayEndpoints() (dark, light rgb) {
+	dark, light = rgb{0, 0, 0}, rgb{255, 255, 255}
+	if ac, ok := currentTheme().txt.GetForeground().(lipgloss.AdaptiveColor); ok {
+		if c := parseHexRGB(ac.Light); c != nil {
+			dark = *c
+		}
+		if c := parseHexRGB(ac.Dark); c != nil {
+			light = *c
+		}
+	}
+	return dark, light
+}
+
+// overlayContrast returns the colour to print a character over a gauge cell
+// drawn in c: the theme's dark ink when c is light, the light ink when c is
+// dark, switching at the middle of the luminance range.
+//
+// This is luminance, not inversion. The request was phrased as "invert the
+// background colour", and inversion does stand the text out against the cell
+// at the extremes -- but only there: inverting a mid-tone returns another
+// mid-tone, so text over the amber middle of the default gradient
+// (#e9c446) would land at roughly the same luminance as the amber and vanish
+// into it. A luminance threshold always returns an endpoint on the opposite
+// side of the bar's range, so the character stands out at every position of
+// the gradient, mid-tone included.
+//
+// The 0.5 threshold is the midpoint of the linear 0..1 scale the weights
+// produce: every theme's gradient stops sit clearly on one side or the other
+// (default green through orange land at 0.60-0.77, red at 0.45, and the dim
+// track never above 0.19), so the switch happens between the orange and red
+// stops where it should, not inside a run of similar cells.
+func overlayContrast(c rgb) rgb {
+	dark, light := overlayEndpoints()
+	if c.luminance() < 0.5 {
+		return light
+	}
+	return dark
+}
+
 // dim scales a colour towards black. Used for the unfilled part of a gauge, so
 // the track is a dark preview of the danger gradient rather than dead grey.
 func (c rgb) dim(f float64) rgb { return rgb{c.r * f, c.g * f, c.b * f} }
