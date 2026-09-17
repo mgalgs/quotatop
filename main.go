@@ -210,6 +210,11 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.refresh(false)
 		case "R":
 			return m, m.refresh(true)
+		case "l":
+			// Cycle layouts, wrapping at the end. One key, cycle, wrap: there
+			// is no layout menu, and the choice is not persisted across runs.
+			m.cycleLayout()
+			return m, nil
 		case "?":
 			m.showHelp = !m.showHelp
 			return m, nil
@@ -286,7 +291,7 @@ const usageText = `quotatop -- live Claude and Codex quota in one window.
 
 Usage: quotatop [options]
 
-Keys:  r refresh · R refresh Claude past its cache · ? keys · q quit
+Keys:  r refresh · R refresh Claude past its cache · l layout · ? keys · q quit
 
 Options:
 `

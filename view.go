@@ -509,13 +509,19 @@ func (m model) tightest() (string, float64, bool) {
 
 func (m model) footerLine(width int) string {
 	keys := []struct{ key, label string }{
-		{"r", "refresh"}, {"R", "force-fresh"}, {"?", "keys"}, {"q", "quit"},
+		{"r", "refresh"}, {"R", "force-fresh"}, {"l", "layout"}, {"?", "keys"}, {"q", "quit"},
 	}
 	parts := make([]string, 0, len(keys))
 	for _, entry := range keys {
 		parts = append(parts, styleKey.Render(entry.key)+styleDim.Render(" "+entry.label))
 	}
 	left := strings.Join(parts, styleDim.Render(" · "))
+	// The current layout's name, so the user knows what l just switched to.
+	// It is only shown off the default: in full the footer keeps exactly
+	// today's content, and there is nothing that was just switched.
+	if name := m.layoutName(); name != layoutFull {
+		left += styleDim.Render(" · ") + styleMut.Render(name)
+	}
 
 	right := ""
 	if name, worst, ok := m.tightest(); ok {
@@ -534,6 +540,7 @@ func (m model) helpBody(width int) string {
 	rows := [][2]string{
 		{"r", "refresh all sources now"},
 		{"R", "refresh Claude past its 10-minute cache (hits the API)"},
+		{"l", "cycle layout: full, compact, vertical"},
 		{"?", "toggle this help"},
 		{"q / esc / ctrl-c", "quit"},
 	}
@@ -610,6 +617,18 @@ func (m model) layoutName() string {
 		return layoutFull
 	}
 	return m.layout
+}
+
+// cycleLayout advances the layout one step, wrapping at the end: the l key is
+// the whole layout control -- cycle only, no menu.
+func (m *model) cycleLayout() {
+	name := m.layoutName()
+	for i, layout := range layouts {
+		if layout == name {
+			m.layout = layouts[(i+1)%len(layouts)]
+			return
+		}
+	}
 }
 
 // gridColumns is how many panels fit side by side at width, given panels no
