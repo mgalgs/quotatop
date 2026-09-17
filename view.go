@@ -18,6 +18,31 @@ const (
 	gaugeMinPad = 8
 )
 
+// Layout names: what --layout accepts, what the l key will cycle, and what the
+// footer will show when the user has switched off the default.
+const (
+	layoutFull     = "full"
+	layoutCompact  = "compact"
+	layoutVertical = "vertical"
+)
+
+var layouts = []string{layoutFull, layoutCompact, layoutVertical}
+
+// parseLayout maps a --layout value onto a known layout. The empty string is
+// the default; an unknown name is an error rather than a silent fallback, so a
+// typo in a test fails loudly instead of quietly exercising the default.
+func parseLayout(name string) (string, error) {
+	if name == "" {
+		return layoutFull, nil
+	}
+	for _, layout := range layouts {
+		if layout == name {
+			return layout, nil
+		}
+	}
+	return "", fmt.Errorf(`unknown layout %q (valid: %s)`, name, strings.Join(layouts, ", "))
+}
+
 var (
 	sparkRunes   = []rune("▁▂▃▄▅▆▇█")
 	partialRunes = []rune("▏▎▍▌▋▊▉")

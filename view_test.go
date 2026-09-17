@@ -42,6 +42,33 @@ func TestBoxIsRectangular(t *testing.T) {
 	}
 }
 
+// --layout accepts the known names, defaults the empty string to full, and
+// rejects a typo with a message that names the bad value and the valid set --
+// a typo in a test must fail loudly, not fall back.
+func TestParseLayout(t *testing.T) {
+	for _, name := range []string{"", layoutFull, layoutCompact, layoutVertical} {
+		want := name
+		if want == "" {
+			want = layoutFull
+		}
+		got, err := parseLayout(name)
+		if err != nil {
+			t.Errorf("parseLayout(%q) error = %v, want nil", name, err)
+		} else if got != want {
+			t.Errorf("parseLayout(%q) = %q, want %q", name, got, want)
+		}
+	}
+	for _, name := range []string{"grid", "Full", "COMPACT", "full "} {
+		if got, err := parseLayout(name); err == nil {
+			t.Errorf("parseLayout(%q) = %q, want an error", name, got)
+		} else if !strings.Contains(err.Error(), `"`+name+`"`) {
+			t.Errorf("parseLayout(%q) error = %v, want the offending name quoted", name, err)
+		} else if !strings.Contains(err.Error(), "full, compact, vertical") {
+			t.Errorf("parseLayout(%q) error = %v, want the valid names listed", name, err)
+		}
+	}
+}
+
 func demoSnapshot(now time.Time) *Snapshot {
 	return &Snapshot{
 		Source: "claude", Title: "CLAUDE", Verb: "fetched", Footnote: "account · cache ≤10m",

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,77 @@ import (
 // source, one Codex source, an empty Account, the unchanged panel title, and
 // no "account" field anywhere in --json. This is the baseline every other
 // multi-account test is a departure from.
+// captureStdout runs d with os.Stdout and os.Stderr pointed at pipes and
+// returns whatever each of them received.
+func captureStdout(t *testing.T, d func()) (string, string) {
+	t.Helper()
+	oldOut, oldErr := os.Stdout, os.Stderr
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout, os.Stderr = outW, errW
+	run := make(chan struct{})
+	var stdout, stderr string
+	go func() {
+		outBytes, err := io.ReadAll(outR)
+		if err == nil {
+			errBytes, err := io.ReadAll(errR)
+			if err == nil {
+				stdout, stderr = string(outBytes), string(errBytes)
+			}
+		}
+		close(run)
+	}()
+	d()
+	outW.Close()
+	errW.Close()
+	os.Stdout, os.Stderr = oldOut, oldErr
+	<-run
+	return stdout, stderr
+}
+
+// The one-shot renderer is the test instrument for every layout: height is
+// threaded through as a line budget, and an unknown layout name is a hard
+// error, not a silent fallback to the default.
+func TestRenderSnapshotRejectsUnknownLayout(t *testing.T) {
+	t.Setenv("NO_COLOR", "1")
+	isolateAccountEnv(t)
+
+	fetchModel := func() model {
+		now := time.Now()
+		m := newModel(20*time.Second, loadHistory(""))
+		snap := demoSnapshot(now)
+		m.sources = []sourceState{{fetch: func(bool) Snapshot { return *snap }}}
+		return m
+	}
+
+	// height 0 keeps today's behaviour: no clamp, no marker.
+	stdout, _ := captureStdout(t, func() {
+		if code := renderSnapshot(fetchModel(), 80, 0, "", false); code != 0 {
+			t.Errorf("exit code = %d, want 0", code)
+		}
+	})
+	if strings.Contains(stdout, "\u2026") {
+		t.Error("unheighted render carries a truncation marker, want none")
+	}
+
+	// An unknown layout exits non-zero and says so on stderr, listing the
+	// valid names.
+	_, stderr := captureStdout(t, func() {
+		if code := renderSnapshot(fetchModel(), 80, 0, "grid", false); code == 0 {
+			t.Error("exit code = 0 for an unknown layout, want non-zero")
+		}
+	})
+	if !strings.Contains(stderr, `unknown layout "grid"`) || !strings.Contains(stderr, "full, compact, vertical") {
+		t.Errorf("stderr = %q, want the unknown name and the valid set", stderr)
+	}
+}
+
 func TestDefaultSourcesWithNoAccountsMatchesTodaysBehavior(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)

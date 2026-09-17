@@ -50,6 +50,10 @@ type model struct {
 
 	sources  []sourceState
 	showHelp bool
+
+	// layout is one of layouts, or "" (the zero value), which reads as the
+	// default, full. The l key cycles it; --layout sets it for --snapshot.
+	layout string
 }
 
 // defaultSources is the one place that names the sources this build knows how
@@ -303,6 +307,8 @@ func main() {
 	jsonOutput := flag.Bool("json", false, "write one JSON document to stdout and exit (no TUI)")
 	fresh := flag.Bool("fresh", false, "bypass the Claude 10-minute quota cache on the first read")
 	width := flag.Int("width", 0, "width for --snapshot (0 = detect, fall back to the widest layout)")
+	height := flag.Int("height", 0, "height for --snapshot (0 = no height limit)")
+	layout := flag.String("layout", "", "layout for --snapshot: full, compact or vertical (default full)")
 	noHistory := flag.Bool("no-history", false, "do not read or write the trend history file")
 	flag.Parse()
 	if flag.NArg() > 0 {
@@ -330,7 +336,7 @@ func main() {
 	m := newModel(*interval, loadHistory(path))
 
 	if *snapshot {
-		os.Exit(renderSnapshot(m, *width, *fresh))
+		os.Exit(renderSnapshot(m, *width, *height, *layout, *fresh))
 	}
 
 	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
@@ -378,7 +384,12 @@ func recordJSONSnapshots(history *History, snaps []Snapshot, record bool) {
 
 // renderSnapshot prints a single frame. Handy for a quick non-interactive look,
 // and it is how the layout is checked without driving a terminal.
-func renderSnapshot(m model, width int, fresh bool) int {
+func renderSnapshot(m model, width, height int, layout string, fresh bool) int {
+	name, err := parseLayout(layout)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "quotatop:", err)
+		return 2
+	}
 	if os.Getenv("NO_COLOR") != "" {
 		lipgloss.SetColorProfile(termenv.Ascii)
 	} else if os.Getenv("CLICOLOR_FORCE") != "" {
@@ -392,6 +403,8 @@ func renderSnapshot(m model, width int, fresh bool) int {
 		width = terminalWidth(maxLayout)
 	}
 	m.width = width
+	m.height = height // 0 means no limit: a piped --snapshot keeps today's unclamped output
+	m.layout = name
 	m.now = time.Now()
 
 	failed := false
