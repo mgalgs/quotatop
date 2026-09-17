@@ -66,7 +66,7 @@ func TestRenderSnapshotRejectsUnknownLayout(t *testing.T) {
 
 	// height 0 keeps today's behaviour: no clamp, no marker.
 	stdout, _ := captureStdout(t, func() {
-		if code := renderSnapshot(fetchModel(), 80, 0, "", false); code != 0 {
+		if code := renderSnapshot(fetchModel(), 80, 0, "", 0, false); code != 0 {
 			t.Errorf("exit code = %d, want 0", code)
 		}
 	})
@@ -77,7 +77,7 @@ func TestRenderSnapshotRejectsUnknownLayout(t *testing.T) {
 	// An unknown layout exits non-zero and says so on stderr, listing the
 	// valid names.
 	_, stderr := captureStdout(t, func() {
-		if code := renderSnapshot(fetchModel(), 80, 0, "grid", false); code == 0 {
+		if code := renderSnapshot(fetchModel(), 80, 0, "grid", 0, false); code == 0 {
 			t.Error("exit code = 0 for an unknown layout, want non-zero")
 		}
 	})
@@ -99,7 +99,7 @@ func TestRenderSnapshotTruncatesToHeight(t *testing.T) {
 		return m
 	}
 	stdout, _ := captureStdout(t, func() {
-		if code := renderSnapshot(fetchModel(), 80, 6, "", false); code != 0 {
+		if code := renderSnapshot(fetchModel(), 80, 6, "", 0, false); code != 0 {
 			t.Errorf("exit code = %d, want 0", code)
 		}
 	})

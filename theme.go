@@ -25,37 +25,191 @@ func (c rgb) color() lipgloss.Color { return lipgloss.Color(c.hex()) }
 // the track is a dark preview of the danger gradient rather than dead grey.
 func (c rgb) dim(f float64) rgb { return rgb{c.r * f, c.g * f, c.b * f} }
 
-// gradientStops runs calm green -> amber -> alarm red across 0..100% usage.
-var gradientStops = []rgb{
-	{0x3f, 0xd1, 0x8b}, // 0%   green
-	{0x86, 0xd7, 0x56}, // 25%  lime
-	{0xe9, 0xc4, 0x46}, // 50%  amber
-	{0xf0, 0x8a, 0x3c}, // 75%  orange
-	{0xe5, 0x53, 0x53}, // 100% red
+// theme is one of the pre-built colour schemes: the seven text styles the
+// renderer uses everywhere, plus the gauge's gradient stops. The gauges are
+// the most colourful thing on screen, so a scheme recolors them too. name is
+// an internal identifier for the source and the tests; it is never displayed.
+type theme struct {
+	name                              string
+	dim, mut, txt, key, err, wrn, brd lipgloss.Style
+	gradient                          [5]rgb // calm at 0% -> alarming at 100%
 }
 
-// gradientAt samples the gradient at t in [0,1].
+// fg builds one of a theme's text styles from a colour.
+func fg(c lipgloss.TerminalColor) lipgloss.Style { return lipgloss.NewStyle().Foreground(c) }
+
+// themes is every scheme the t key can cycle through. themes[0] carries
+// exactly the pre-theme values.
+var themes = []theme{
+	{
+		name: "default",
+		dim:  fg(lipgloss.AdaptiveColor{Light: "#9096a2", Dark: "#6b7280"}),
+		mut:  fg(lipgloss.AdaptiveColor{Light: "#6a7180", Dark: "#9aa3b2"}),
+		txt:  fg(lipgloss.AdaptiveColor{Light: "#1f2430", Dark: "#e6e9ef"}),
+		key:  fg(lipgloss.AdaptiveColor{Light: "#3b6ea5", Dark: "#7aa2f7"}),
+		err:  fg(lipgloss.Color("#e55353")),
+		wrn:  fg(lipgloss.Color("#f0a13c")),
+		brd:  fg(lipgloss.AdaptiveColor{Light: "#b3b9c4", Dark: "#4c566a"}),
+		gradient: [5]rgb{
+			{0x3f, 0xd1, 0x8b}, // 0%   green
+			{0x86, 0xd7, 0x56}, // 25%  lime
+			{0xe9, 0xc4, 0x46}, // 50%  amber
+			{0xf0, 0x8a, 0x3c}, // 75%  orange
+			{0xe5, 0x53, 0x53}, // 100% red
+		},
+	},
+	{
+		// High contrast: near-pure text colours and a saturated gradient, so
+		// every element is as loud as the terminal allows.
+		name: "contrast",
+		dim:  fg(lipgloss.AdaptiveColor{Light: "#4a5160", Dark: "#b8c0cc"}),
+		mut:  fg(lipgloss.AdaptiveColor{Light: "#3a4150", Dark: "#c8d0dc"}),
+		txt:  fg(lipgloss.AdaptiveColor{Light: "#000000", Dark: "#ffffff"}),
+		key:  fg(lipgloss.AdaptiveColor{Light: "#0033cc", Dark: "#4d9fff"}),
+		err:  fg(lipgloss.Color("#ff2222")),
+		wrn:  fg(lipgloss.Color("#ff9900")),
+		brd:  fg(lipgloss.AdaptiveColor{Light: "#333945", Dark: "#a8b2c0"}),
+		gradient: [5]rgb{
+			{0x12, 0xe0, 0x5a}, // 0%   green
+			{0x7a, 0xe8, 0x12}, // 25%  lime
+			{0xff, 0xd4, 0x00}, // 50%  yellow
+			{0xff, 0x95, 0x00}, // 75%  orange
+			{0xff, 0x30, 0x30}, // 100% red
+		},
+	},
+	{
+		// Muted: low-contrast, desaturated neutrals; the gauge still moves
+		// calm sage to alarm rose so the bars keep their reading.
+		name: "muted",
+		dim:  fg(lipgloss.AdaptiveColor{Light: "#8a8f98", Dark: "#767c88"}),
+		mut:  fg(lipgloss.AdaptiveColor{Light: "#949aa4", Dark: "#6f7684"}),
+		txt:  fg(lipgloss.AdaptiveColor{Light: "#3a3f47", Dark: "#c9ccd2"}),
+		key:  fg(lipgloss.AdaptiveColor{Light: "#5f7a99", Dark: "#8fa3bd"}),
+		err:  fg(lipgloss.Color("#c96a6a")),
+		wrn:  fg(lipgloss.Color("#c99a62")),
+		brd:  fg(lipgloss.AdaptiveColor{Light: "#a9adb4", Dark: "#565c66"}),
+		gradient: [5]rgb{
+			{0x86, 0xb8, 0x9b}, // 0%   sage
+			{0xa8, 0xbc, 0x7e}, // 25%  olive
+			{0xc9, 0xb3, 0x78}, // 50%  sand
+			{0xc4, 0x93, 0x6f}, // 75%  clay
+			{0xc0, 0x70, 0x70}, // 100% rose
+		},
+	},
+	{
+		// Warm: cream-and-amber neutrals; the gauge runs olive through
+		// amber into red-orange, staying in the warm family.
+		name: "warm",
+		dim:  fg(lipgloss.AdaptiveColor{Light: "#8a7a68", Dark: "#a08d78"}),
+		mut:  fg(lipgloss.AdaptiveColor{Light: "#7d6f5d", Dark: "#ab9a84"}),
+		txt:  fg(lipgloss.AdaptiveColor{Light: "#35291e", Dark: "#f2e8d8"}),
+		key:  fg(lipgloss.AdaptiveColor{Light: "#a0522d", Dark: "#e8a06a"}),
+		err:  fg(lipgloss.Color("#cf3f2a")),
+		wrn:  fg(lipgloss.Color("#d98c2b")),
+		brd:  fg(lipgloss.AdaptiveColor{Light: "#b5a48d", Dark: "#6e5f4e"}),
+		gradient: [5]rgb{
+			{0x6f, 0xae, 0x63}, // 0%   olive green
+			{0xb8, 0xb0, 0x4a}, // 25%  chartreuse
+			{0xdf, 0xa8, 0x3e}, // 50%  amber
+			{0xd9, 0x7b, 0x2e}, // 75%  orange
+			{0xd4, 0x3f, 0x2a}, // 100% red-orange
+		},
+	},
+	{
+		// Cool: blue-and-teal neutrals; the gauge starts teal and warms
+		// only in its final stops, so the alarm end still reads hot.
+		name: "cool",
+		dim:  fg(lipgloss.AdaptiveColor{Light: "#6d7f8f", Dark: "#7e93a5"}),
+		mut:  fg(lipgloss.AdaptiveColor{Light: "#5f7385", Dark: "#8aa2b5"}),
+		txt:  fg(lipgloss.AdaptiveColor{Light: "#16222e", Dark: "#dce8f2"}),
+		key:  fg(lipgloss.AdaptiveColor{Light: "#2a6db5", Dark: "#6cc0ff"}),
+		err:  fg(lipgloss.Color("#ff5c5c")),
+		wrn:  fg(lipgloss.Color("#f0a04a")),
+		brd:  fg(lipgloss.AdaptiveColor{Light: "#93a5b4", Dark: "#4d6478"}),
+		gradient: [5]rgb{
+			{0x2f, 0xc6, 0xb0}, // 0%   teal
+			{0x57, 0xc2, 0x6e}, // 25%  sea green
+			{0x9a, 0xc1, 0x4d}, // 50%  yellow-green
+			{0xd0, 0x8b, 0x3c}, // 75%  amber
+			{0xe0, 0x48, 0x48}, // 100% red
+		},
+	},
+	{
+		// Near-monochrome: greys throughout. The error colour is the one
+		// place saturation is allowed; the warning keeps a muted amber so it
+		// still stands apart from the body text. The gauge is a brightness
+		// ramp, calm dark to alarm bright, which reads on a dark terminal.
+		name: "mono",
+		dim:  fg(lipgloss.AdaptiveColor{Light: "#6b6b6b", Dark: "#8a8a8a"}),
+		mut:  fg(lipgloss.AdaptiveColor{Light: "#787878", Dark: "#7e7e7e"}),
+		txt:  fg(lipgloss.AdaptiveColor{Light: "#111111", Dark: "#f0f0f0"}),
+		key:  fg(lipgloss.AdaptiveColor{Light: "#333333", Dark: "#bbbbbb"}),
+		err:  fg(lipgloss.Color("#e55353")),
+		wrn:  fg(lipgloss.Color("#cf9a4f")),
+		brd:  fg(lipgloss.AdaptiveColor{Light: "#9a9a9a", Dark: "#555555"}),
+		gradient: [5]rgb{
+			{0x4a, 0x4a, 0x4a}, // 0%   calm dark grey
+			{0x66, 0x66, 0x66}, // 25%
+			{0x88, 0x88, 0x88}, // 50%
+			{0xaa, 0xaa, 0xaa}, // 75%
+			{0xf0, 0xf0, 0xf0}, // 100% alarm bright
+		},
+	},
+	{
+		// High saturation: neon palette; the most colourful of the set.
+		name: "vivid",
+		dim:  fg(lipgloss.AdaptiveColor{Light: "#5560c8", Dark: "#8890ff"}),
+		mut:  fg(lipgloss.AdaptiveColor{Light: "#7040b8", Dark: "#b088ff"}),
+		txt:  fg(lipgloss.AdaptiveColor{Light: "#1a1040", Dark: "#f0ecff"}),
+		key:  fg(lipgloss.AdaptiveColor{Light: "#c020c0", Dark: "#ff7ce8"}),
+		err:  fg(lipgloss.Color("#ff1f45")),
+		wrn:  fg(lipgloss.Color("#ff8c00")),
+		brd:  fg(lipgloss.AdaptiveColor{Light: "#8878e0", Dark: "#6c5ce7"}),
+		gradient: [5]rgb{
+			{0x00, 0xff, 0xa3}, // 0%   spring green
+			{0x7d, 0xff, 0x3a}, // 25%  neon lime
+			{0xff, 0xe6, 0x00}, // 50%  neon yellow
+			{0xff, 0x95, 0x00}, // 75%  orange
+			{0xff, 0x20, 0x40}, // 100% hot pink-red
+		},
+	},
+}
+
+// themeIndex is the index into themes of the current theme. It starts at 0 on
+// every launch and is not persisted: the choice lasts as long as the process.
+//
+// Safety invariant: themeIndex may only be written from model.Update (the t
+// key) and from renderSnapshot (the --theme flag, after which the process
+// exits), and read from View() and its helpers, plus once from newModel at
+// construction, before any Update has run. That is safe because rendering is
+// single-goroutine: Bubble Tea runs Update and View on the same goroutine and
+// nothing inside a tea.Cmd touches a style, and there are no t.Parallel()
+// tests in this repo, so no test can race on it either. A future
+// t.Parallel() test or a rendering goroutine would break this silently; this
+// comment is the only warning a reader will get.
+var themeIndex = 0
+
+func currentTheme() theme { return themes[themeIndex] }
+
+// cycleTheme advances to the next theme, wrapping at the end: the t key is
+// the whole theme control -- cycle only, no menu, no selection.
+func cycleTheme() { themeIndex = (themeIndex + 1) % len(themes) }
+
+// gradientAt samples the current theme's gauge gradient at t in [0,1]. Every
+// theme's stops run calm -> alarming across 0..100% usage: a full bar must
+// always read more alarming than an empty one.
 func gradientAt(t float64) rgb {
+	stops := currentTheme().gradient
 	t = math.Max(0, math.Min(1, t))
-	span := t * float64(len(gradientStops)-1)
+	span := t * float64(len(stops)-1)
 	i := int(span)
-	if i >= len(gradientStops)-1 {
-		return gradientStops[len(gradientStops)-1]
+	if i >= len(stops)-1 {
+		return stops[len(stops)-1]
 	}
 	f := span - float64(i)
-	a, b := gradientStops[i], gradientStops[i+1]
+	a, b := stops[i], stops[i+1]
 	return rgb{a.r + (b.r-a.r)*f, a.g + (b.g-a.g)*f, a.b + (b.b-a.b)*f}
 }
-
-var (
-	styleDim = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#9096a2", Dark: "#6b7280"})
-	styleMut = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#6a7180", Dark: "#9aa3b2"})
-	styleTxt = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#1f2430", Dark: "#e6e9ef"})
-	styleKey = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#3b6ea5", Dark: "#7aa2f7"})
-	styleErr = lipgloss.NewStyle().Foreground(lipgloss.Color("#e55353"))
-	styleWrn = lipgloss.NewStyle().Foreground(lipgloss.Color("#f0a13c"))
-	styleBrd = lipgloss.NewStyle().Foreground(lipgloss.AdaptiveColor{Light: "#b3b9c4", Dark: "#4c566a"})
-)
 
 // pad right-pads s with spaces to n display cells, or truncates it if it is
 // wider. Every panel line goes through this so the right border stays aligned.
@@ -121,15 +275,15 @@ func borderLine(width int, openRune, closeRune string, left, right string) strin
 			fill = 0
 		}
 	}
-	return styleBrd.Render(openRune) + leftPart + styleBrd.Render(strings.Repeat("─", fill)) +
-		rightPart + styleBrd.Render(closeRune)
+	return currentTheme().brd.Render(openRune) + leftPart + currentTheme().brd.Render(strings.Repeat("─", fill)) +
+		rightPart + currentTheme().brd.Render(closeRune)
 }
 
 // box draws a rounded panel with an inset title (and optional chip) on the top
 // edge and an inset footer on the bottom edge.
 func box(width int, title, chip string, body []string, footerLeft, footerRight string) string {
 	lines := []string{borderLine(width, "╭", "╮", title, chip)}
-	bar := styleBrd.Render("│")
+	bar := currentTheme().brd.Render("│")
 	for _, line := range body {
 		lines = append(lines, bar+" "+pad(line, width-4)+" "+bar)
 	}
