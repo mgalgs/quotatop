@@ -68,6 +68,17 @@ func TestStateRoundTrip(t *testing.T) {
 	}
 }
 
+// The first save on a fresh machine must work: nothing else has created the
+// state directory, so saveState has to make it itself, at any depth.
+func TestSaveStateCreatesMissingParentDir(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state", "quotatop", "state.json")
+	want := uiState{Theme: 2, Layout: "compact"}
+	saveState(path, want)
+	if got := loadState(path); got != want {
+		t.Errorf("save into a missing directory: got %+v, want %+v", got, want)
+	}
+}
+
 // No file at all loads the built-in defaults, with no error: the first run
 // of the tool always goes through this path.
 func TestLoadStateMissingFile(t *testing.T) {
@@ -115,18 +126,24 @@ func TestLoadStateUnknownLayout(t *testing.T) {
 	}
 }
 
-// An unwritable state path must break nothing: the save fails silently and
-// the model still works. The path's parent cannot be created, so the temp
-// file for the atomic write cannot be made.
+// An uncreatable state path must break nothing: the save fails silently and
+// the model still works. The path's parent is an existing regular file, so
+// the state directory cannot be created and the temp file for the atomic
+// write cannot be made. (A plain missing parent would not do: saveState
+// creates those on purpose.)
 func TestSaveStateUnwritablePathBreaksNothing(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "does-not-exist", "sub", "state.json")
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "not-a-dir"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "not-a-dir", "state.json")
 	t.Setenv("QUOTATOP_STATE", path)
 	isolateAccountEnv(t)
 	defer func(prev int) { themeIndex = prev }(themeIndex)
 
 	saveState(path, uiState{Theme: 3, Layout: layoutCompact})
-	if _, err := os.Lstat(path); !os.IsNotExist(err) {
-		t.Errorf("state file appeared at an unwritable path: %v", err)
+	if got := loadState(path); got != wantState(0, layoutFull) {
+		t.Errorf("state was readable at an uncreatable path: %+v", got)
 	}
 
 	m := newModel(time.Second, loadHistory(""))

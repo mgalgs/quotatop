@@ -64,6 +64,12 @@ func loadState(path string) uiState {
 // file in the same directory, renamed over the target -- so a crash can
 // never leave a truncated state file.
 //
+// It creates the state directory first, mirroring History.append: on a
+// fresh machine nothing else has made ~/.local/state/quotatop (or
+// $XDG_STATE_HOME/quotatop), and without this the very first save -- the one
+// from the user's first t or l keypress -- would fail and the feature would
+// silently never work.
+//
 // Unlike the history file there is no lock on purpose. History protects
 // samples, which are data that concurrent writers would lose; this is a UI
 // preference, where two instances cycling at once simply end up
@@ -79,6 +85,9 @@ func saveState(path string, state uiState) {
 	}
 	data, err := json.Marshal(state)
 	if err != nil {
+		return
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return
 	}
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".state-*.tmp")
