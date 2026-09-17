@@ -1407,3 +1407,46 @@ func TestCompactForecastOverlayInEveryTheme(t *testing.T) {
 		}
 	}
 }
+
+// The fit rule: a forecast that would leave fewer than gaugeMinRun cells of
+// untouched bar is dropped wholesale, never truncated -- the bar comes out
+// byte-identical to the plain gauge.
+func TestGaugeWithForecastFitRule(t *testing.T) {
+	for _, forecast := range []string{"steady", "~69% at reset", "full in 15h 01m", "full in 2d 3h"} {
+		for width := 1; width <= 40; width++ {
+			got := gaugeWithForecast(width, 41, forecast)
+			plain := gauge(width, 41)
+			if fits := lipgloss.Width(forecast)+gaugeMinRun <= width; fits == (got == plain) {
+				t.Errorf("gaugeWithForecast(%d, 41, %q) %s, want %s", width, forecast,
+					map[bool]string{true: "drew plain", false: "drew an overlay"}[!fits],
+					map[bool]string{true: "an overlay", false: "the plain gauge"}[fits])
+			}
+			if lipgloss.Width(got) != width {
+				t.Errorf("gaugeWithForecast(%d, 41, %q) width = %d, want %d", width, forecast, lipgloss.Width(got), width)
+			}
+		}
+	}
+}
+
+// End to end: below the rule the compact line is byte-identical to the bar
+// of a window without a projection (same label and percentage), and just
+// above it the forecast appears.
+func TestCompactForecastFitRuleAtPanelWidth(t *testing.T) {
+	isolateStatePath(t)
+	forcedColour(t)
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	history := loadHistory("")
+	withProj := Window{Key: "weekly_all", Label: "Weekly", Percent: 41,
+		Length: 168 * time.Hour, ResetsAt: now.Add(127 * time.Hour)}
+	without := withProj
+	without.Length = 0
+
+	// gauge width at panel width W is W-11; the 14-cell forecast needs 22.
+	if got, want := compactWindowLine(31, "claude", withProj, history, now),
+		compactWindowLine(31, "claude", without, history, now); got != want {
+		t.Errorf("at the narrow width the bar should be plain and identical:\ngot:  %q\nwant: %q", got, want)
+	}
+	if line := compactWindowLine(33, "claude", withProj, history, now); !strings.Contains(ansiStrip(line), "full in") {
+		t.Errorf("just above the fit boundary the forecast should appear: %q", line)
+	}
+}

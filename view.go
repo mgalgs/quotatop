@@ -17,6 +17,17 @@ const (
 	panelGap    = 2
 	gaugeMinPad = 8
 
+	// gaugeMinRun is the fit rule for the compact forecast overlay: the
+	// minimum number of bar cells that must stay untouched for the bar to
+	// keep reading as a bar. The text sits at the right-hand end, so the
+	// untouched run is the filled part, which is exactly the percentage read
+	// the bar exists to give. Picked by rendering at 80, 96 and 132 columns:
+	// a bar that keeps eight filled cells (the gauge's own minimum pad) still
+	// shows the percentage clearly next to the ~15-cell forecast, while six
+	// or fewer cells read as a stub with a label stuck to its end. Below the
+	// rule the bar is drawn plain.
+	gaugeMinRun = 8
+
 	// compactMinPanel is the packing floor of the compact layout, not of full:
 	// full depends on 46 and looks wrong below it, while compact only needs
 	// room for a label, a percentage and a short gauge per line.
@@ -140,11 +151,12 @@ func gauge(width int, pct float64) string {
 //
 // The overlay replaces glyphs in place and never inserts or removes a cell:
 // the result is exactly width display cells, the invariant the panel
-// assembly depends on. If the text does not fit in the bar at all, the bar
-// is drawn plain: it is never truncated, because a half-written duration
-// ("full in 2d" meaning "2d 3h") is wrong, not merely short.
+// assembly depends on. The fit rule guards the rest of the bar: if the text
+// plus gaugeMinRun of untouched bar does not fit, the bar is drawn plain. It
+// is never truncated -- a half-written duration ("full in 2d" meaning
+// "2d 3h") is wrong, not merely short.
 func gaugeWithForecast(width int, pct float64, forecast string) string {
-	if lipgloss.Width(forecast) >= width {
+	if lipgloss.Width(forecast)+gaugeMinRun > width {
 		return gauge(width, pct)
 	}
 	cells := gaugeCells(width, pct)
