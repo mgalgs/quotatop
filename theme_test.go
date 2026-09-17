@@ -305,3 +305,73 @@ func TestSnapshotFlagRejectsOutOfRangeTheme(t *testing.T) {
 		t.Errorf("output = %q, want the out-of-range error", out)
 	}
 }
+
+// The overlay ink must stand out against the cell it sits on: dark ink over
+// the light cells (green through orange) and light ink over the dark ones
+// (red, and everything dimmed to the track).
+func TestOverlayContrastFlipsAcrossGradient(t *testing.T) {
+	isolateStatePath(t)
+	forcedColour(t)
+	dark, light := overlayEndpoints()
+
+	// Light cells across the default gradient get the theme's dark ink.
+	for _, c := range []rgb{gradientAt(0), gradientAt(0.25), gradientAt(0.5), gradientAt(0.75)} {
+		if got := overlayContrast(c); got.hex() != dark.hex() {
+			t.Errorf("overlayContrast(%s) = %s, want the dark endpoint %s", c.hex(), got.hex(), dark.hex())
+		}
+	}
+	// Dark cells: the red end of the gradient and any cell dimmed to the
+	// track get the light ink.
+	for _, c := range []rgb{gradientAt(1), gradientAt(0.75).dim(0.25), gradientAt(0).dim(0.25), gradientAt(0.5).dim(0.25)} {
+		if got := overlayContrast(c); got.hex() != light.hex() {
+			t.Errorf("overlayContrast(%s) = %s, want the light endpoint %s", c.hex(), got.hex(), light.hex())
+		}
+	}
+	// Sweeping the whole gradient, the ink must always land on the opposite
+	// side of the luminance range from the cell under it. Every theme, not
+	// just the default: muted's whole gradient sits above the threshold, so
+	// this is what pins its always-dark-ink behaviour.
+	for ti := range themes {
+		setThemeIndex(t, ti)
+		for i := 0; i <= 100; i++ {
+			cell := gradientAt(float64(i) / 100)
+			ink := overlayContrast(cell)
+			if (cell.luminance() >= 0.5) == (ink.luminance() >= 0.5) {
+				t.Errorf("theme %d (%s) t=%d: cell %s (luminance %.3f) got ink %s (luminance %.3f) on the same side of the range",
+					ti, themes[ti].name, i, cell.hex(), cell.luminance(), ink.hex(), ink.luminance())
+			}
+		}
+	}
+}
+
+// The endpoints must come from the theme, not be literals: a theme that is
+// not black-and-white must not get hard black or hard white stamped into its
+// bars. (The contrast theme is deliberately black-and-white, so for it the
+// theme values *are* #000/#fff -- the check is that they come from the
+// theme's own text colour, not from the fallback.)
+func TestOverlayContrastUsesThemeEndpoints(t *testing.T) {
+	isolateStatePath(t)
+	forcedColour(t)
+	for i := range themes {
+		setThemeIndex(t, i)
+		ac, ok := themes[i].txt.GetForeground().(lipgloss.AdaptiveColor)
+		if !ok {
+			t.Fatalf("theme %d: txt style is not an adaptive colour", i)
+		}
+		dark, light := overlayEndpoints()
+		if want := parseHexRGB(ac.Light); want != nil && dark.hex() != want.hex() {
+			t.Errorf("theme %d (%s): dark endpoint = %s, want the theme's light-background text colour %s",
+				i, themes[i].name, dark.hex(), want.hex())
+		}
+		if want := parseHexRGB(ac.Dark); want != nil && light.hex() != want.hex() {
+			t.Errorf("theme %d (%s): light endpoint = %s, want the theme's dark-background text colour %s",
+				i, themes[i].name, light.hex(), want.hex())
+		}
+		if got := overlayContrast(gradientAt(0.5)); got.hex() != dark.hex() {
+			t.Errorf("theme %d: overlayContrast over a light cell = %s, want %s", i, got.hex(), dark.hex())
+		}
+		if got := overlayContrast(gradientAt(1).dim(0.25)); got.hex() != light.hex() {
+			t.Errorf("theme %d: overlayContrast over a dark cell = %s, want %s", i, got.hex(), light.hex())
+		}
+	}
+}
