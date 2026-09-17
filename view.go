@@ -69,24 +69,34 @@ var (
 	partialRunes = []rune("▏▎▍▌▋▊▉")
 )
 
-// gauge draws a continuous bar whose colour is a function of *position*, not of
-// the value: the tail of every bar is red, so a bar creeping into the red end is
-// legible at a glance without reading the number. The unfilled part is the same
-// gradient darkened, which previews where the bar is heading.
-func gauge(width int, pct float64) string {
+// gaugeCell is one cell of a gauge bar: the glyph to print, the colour it is
+// drawn in, and, for a partial cell only, the background it already sits on
+// (the lit fraction is drawn over the dark track).
+type gaugeCell struct {
+	glyph  string
+	colour rgb
+	bg     *rgb
+}
+
+// gaugeCells computes the cells of a continuous bar whose colour is a
+// function of *position*, not of the value: the tail of every bar is red, so a
+// bar creeping into the red end is legible at a glance without reading the
+// number. The unfilled part is the same gradient darkened, which previews
+// where the bar is heading.
+func gaugeCells(width int, pct float64) []gaugeCell {
 	if width < 1 {
-		return ""
+		return nil
 	}
 	exact := math.Max(0, math.Min(100, pct)) / 100 * float64(width)
 	full := int(exact)
 	frac := exact - float64(full)
 
-	var out strings.Builder
+	cells := make([]gaugeCell, width)
 	for i := 0; i < width; i++ {
 		colour := gradientAt((float64(i) + 0.5) / float64(width))
 		switch {
 		case i < full:
-			out.WriteString(lipgloss.NewStyle().Foreground(colour.color()).Render(fullBlock()))
+			cells[i] = gaugeCell{glyph: fullBlock(), colour: colour}
 		case i == full && frac >= 0.125:
 			// A partial cell: the lit fraction over the dark track, so a bar
 			// that is barely moving still shows movement.
@@ -96,13 +106,72 @@ func gauge(width int, pct float64) string {
 			} else if index >= len(partialRunes) {
 				index = len(partialRunes) - 1
 			}
-			out.WriteString(lipgloss.NewStyle().
-				Foreground(colour.color()).
-				Background(colour.dim(0.25).color()).
-				Render(partialBlock(index)))
+			dimmed := colour.dim(0.25)
+			cells[i] = gaugeCell{glyph: partialBlock(index), colour: colour, bg: &dimmed}
 		default:
-			out.WriteString(lipgloss.NewStyle().Foreground(colour.dim(0.25).color()).Render(emptyBlock()))
+			cells[i] = gaugeCell{glyph: emptyBlock(), colour: colour.dim(0.25)}
 		}
+	}
+	return cells
+}
+
+func gauge(width int, pct float64) string {
+	var out strings.Builder
+	for _, cell := range gaugeCells(width, pct) {
+		style := lipgloss.NewStyle().Foreground(cell.colour.color())
+		if cell.bg != nil {
+			style = style.Background(cell.bg.color())
+		}
+		out.WriteString(style.Render(cell.glyph))
+	}
+	return out.String()
+}
+
+// gaugeWithForecast draws a gauge with a short forecast printed over its
+// right-hand end. Each character occupies one of the bar's own cells: the
+// cell's usual colour becomes the character's background (the gradient fill
+// for a filled cell, the dimmed track for an unfilled one) and the character
+// is drawn in overlayContrast of that same colour. A character over the fill
+// therefore reads dark-on-orange and one past the fill light-on-dark, from
+// one rule with no special-casing of where the fill ends. The bar carries no
+// terminal background of its own, so the character needs the explicit
+// background -- swapping the glyph alone would print it in the bar's own
+// colour, invisible against it.
+//
+// The overlay replaces glyphs in place and never inserts or removes a cell:
+// the result is exactly width display cells, the invariant the panel
+// assembly depends on. If the text does not fit in the bar at all, the bar
+// is drawn plain: it is never truncated, because a half-written duration
+// ("full in 2d" meaning "2d 3h") is wrong, not merely short.
+func gaugeWithForecast(width int, pct float64, forecast string) string {
+	if lipgloss.Width(forecast) >= width {
+		return gauge(width, pct)
+	}
+	cells := gaugeCells(width, pct)
+	runes := []rune(forecast)
+	start := width - len(runes) // first cell the text occupies
+	var out strings.Builder
+	for i, cell := range cells {
+		if i < start {
+			style := lipgloss.NewStyle().Foreground(cell.colour.color())
+			if cell.bg != nil {
+				style = style.Background(cell.bg.color())
+			}
+			out.WriteString(style.Render(cell.glyph))
+			continue
+		}
+		// The background the character lands on is what is left of the cell
+		// under it: the fill for a full cell, and the dimmed track for a
+		// track cell or a partial one, where the character covers the lit
+		// fraction entirely.
+		bg := cell.colour
+		if cell.bg != nil {
+			bg = *cell.bg
+		}
+		out.WriteString(lipgloss.NewStyle().
+			Foreground(overlayContrast(bg).color()).
+			Background(bg.color()).
+			Render(string(runes[i-start])))
 	}
 	return out.String()
 }
@@ -371,13 +440,26 @@ func panel(width int, snap *Snapshot, history *History, now time.Time, loading b
 	return box(width, title, chip, body, footer, footnote)
 }
 
+// compactForecastHeadline is the part of projectionText's headline that
+// belongs inside the compact bar: the outcome ("full in 2d 3h", "~69% at
+// reset", "steady"), not the rate. Compact is short of room by definition,
+// and the outcome is the part that carries the warning.
+func compactForecastHeadline(text string) string {
+	if idx := strings.Index(text, "\u2192 "); idx >= 0 {
+		return text[idx+len("\u2192 "):]
+	}
+	return text
+}
+
 // compactWindowLine squeezes one window onto a single line: label, percentage
 // and gauge sharing a row. It is the whole of the compact layout's height
 // economy -- no sparkline, no detail line, no blank spacers between windows --
 // while keeping the two things that must survive: the window's current
 // percentage (a dash when the window expired), and its bar, which is still
-// the fastest read of which window is red.
-func compactWindowLine(width int, window Window) string {
+// the fastest read of which window is red. When the window has a burn
+// projection, the forecast's headline is printed inside the bar itself, the
+// one place a one-line panel has room for it (gaugeWithForecast).
+func compactWindowLine(width int, identity string, window Window, history *History, now time.Time) string {
 	pct, barPct := percentText(window.Percent), window.Percent
 	if window.Expired {
 		pct, barPct = "—", 0
@@ -393,7 +475,17 @@ func compactWindowLine(width int, window Window) string {
 	if gaugeWidth < 1 {
 		gaugeWidth = 1
 	}
-	return label + " " + pctStyled + " " + gauge(gaugeWidth, barPct)
+	bar := gauge(gaugeWidth, barPct)
+	// An expired window already withholds its percentage above; a forecast is
+	// itself a percentage claim, so it is withheld there too, exactly as the
+	// full layout withholds its detail-line projection.
+	if !window.Expired {
+		projection := history.Project(identity, window, now)
+		if text, _, _ := projectionText(projection, window.ResetsAt, window.Length, now); text != "" {
+			bar = gaugeWithForecast(gaugeWidth, barPct, compactForecastHeadline(text))
+		}
+	}
+	return label + " " + pctStyled + " " + bar
 }
 
 // panelCompact renders one source with the layout that squeezes everything
@@ -423,7 +515,7 @@ func panelCompact(width int, snap *Snapshot, history *History, now time.Time, lo
 		body = append(body, currentTheme().err.Render(truncate(snap.Err.Error(), content)))
 	} else {
 		for _, window := range snap.Windows {
-			body = append(body, compactWindowLine(content, window))
+			body = append(body, compactWindowLine(content, snap.Identity(), window, history, now))
 		}
 		if snap.LimitReached != "" {
 			body = append(body, currentTheme().err.Render(truncate("blocked: "+humanizeReason(snap.LimitReached), content)))

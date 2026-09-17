@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/termenv"
 )
 
 // everyLineWidth checks that a rendered block is a clean rectangle of the width
@@ -1302,5 +1303,107 @@ func TestWindowLinesDropsGapToKeepProjection(t *testing.T) {
 	lines = windowLines(80, "claude", window, history, now)
 	if detail := lines[2]; !strings.Contains(detail, "(2d 20h short)") {
 		t.Errorf("wide detail line = %q, want the gap rendered", detail)
+	}
+}
+
+// The overlay replaces glyphs in place and never inserts or removes a cell:
+// with or without a forecast, the bar is exactly width display cells.
+// lipgloss.Width is the assertion, not len() -- len counts escape bytes.
+func TestGaugeWithForecastIsExactlyWidthCells(t *testing.T) {
+	for _, width := range []int{1, 2, 7, 20, 45, 120} {
+		for _, pct := range []float64{0, 0.4, 3, 9.7, 50, 99.6, 100, 140, -5} {
+			for _, forecast := range []string{"", "steady", "~69% at reset", "full in 15h 01m", "full in 2d 3h"} {
+				if got := lipgloss.Width(gaugeWithForecast(width, pct, forecast)); got != width {
+					t.Errorf("gaugeWithForecast(%d, %v, %q) width = %d, want %d", width, pct, forecast, got, width)
+				}
+			}
+		}
+	}
+}
+
+// The compact panels stay a clean rectangle when their windows carry
+// projections: the overlay may not displace the right border, in any layout
+// that uses panelCompact.
+func TestPanelCompactWithProjectionIsRectangular(t *testing.T) {
+	isolateStatePath(t)
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	history := loadHistory("")
+	snap := &Snapshot{Source: "claude", Title: "CLAUDE", Observed: now,
+		Windows: []Window{
+			{Key: "session", Label: "5-hour", Percent: 9, ResetsAt: now.Add(4 * time.Hour)},
+			{Key: "weekly_all", Label: "Weekly", Percent: 41, Length: 168 * time.Hour, ResetsAt: now.Add(127 * time.Hour)},
+			{Key: "weekly_scoped", Label: "Weekly · Fable", Percent: 12, Length: 168 * time.Hour, ResetsAt: now.Add(127 * time.Hour)},
+		}}
+	for _, layout := range []string{layoutCompact, layoutCompactVertical} {
+		for _, width := range []int{34, 46, 66, 132} {
+			everyLineWidth(t, panelCompact(width, snap, history, now, false), width, layout)
+		}
+	}
+}
+
+// The headline of the forecast is printed inside the bar when the window has
+// a projection; windows without one, and expired ones, keep the plain bar.
+func TestCompactForecastShownOnlyWhenProjected(t *testing.T) {
+	isolateStatePath(t)
+	forcedColour(t)
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	history := loadHistory("")
+	withProj := Window{Key: "weekly_all", Label: "Weekly", Percent: 41,
+		Length: 168 * time.Hour, ResetsAt: now.Add(127 * time.Hour)}
+	without := withProj
+	without.Length = 0 // no length: the sustained model cannot date it, and with an empty history the live model has nothing to fit
+	expired := withProj
+	expired.Expired = true
+
+	plain := func(line string) string { return ansiStrip(line) }
+
+	if line := compactWindowLine(66, "claude", withProj, history, now); !strings.Contains(plain(line), "full in") {
+		t.Errorf("window with a projection: bar line = %q, want the forecast headline inside the bar", line)
+	}
+	if line := compactWindowLine(66, "claude", without, history, now); strings.Contains(plain(line), "full in") || strings.Contains(plain(line), "at reset") || strings.Contains(plain(line), "steady") {
+		t.Errorf("window without a projection: bar line = %q, want no forecast text", line)
+	}
+	if line := compactWindowLine(66, "claude", expired, history, now); !strings.Contains(plain(line), "—") || strings.Contains(plain(line), "full in") {
+		t.Errorf("expired window: bar line = %q, want a dash and no forecast", line)
+	}
+}
+
+// Every theme renders the overlay with its own colours: the width invariant
+// holds, the headline is present, and the last character of the text carries
+// the background of the bar's last cell -- a colour computed from that
+// theme's gradient, so a theme that stops recolouring its gauge shows here.
+func TestCompactForecastOverlayInEveryTheme(t *testing.T) {
+	isolateStatePath(t)
+	forcedColour(t)
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	history := loadHistory("")
+	snap := &Snapshot{Source: "claude", Title: "CLAUDE", Observed: now,
+		Windows: []Window{{Key: "weekly_all", Label: "Weekly", Percent: 41,
+			Length: 168 * time.Hour, ResetsAt: now.Add(127 * time.Hour)}}}
+	for i := range themes {
+		setThemeIndex(t, i)
+		width := 66
+		panel := panelCompact(width, snap, history, now, false)
+		everyLineWidth(t, panel, width, themes[i].name)
+		line := strings.Split(panel, "\n")[1]
+		if !strings.Contains(ansiStrip(line), "full in") {
+			t.Errorf("theme %d (%s): overlay text missing from the bar line", i, themes[i].name)
+		}
+		gaugeWidth := width - 4 - 6 - 3 - 2 // content minus label, percentage and the two separators
+		if got := lipgloss.Width(gaugeWithForecast(gaugeWidth, 41, "full in 2d 11h")); got != gaugeWidth {
+			t.Errorf("theme %d: overlaid bar width = %d, want %d", i, got, gaugeWidth)
+		}
+		// The text is anchored at the right edge of the bar, so its last
+		// character sits over the bar's last (track) cell; that cell's
+		// colour, from this theme's gradient, must appear as the character's
+		// background. The expected sequence is produced by the same colour
+		// pipeline the renderer uses (termenv round-trips hex through linear
+		// space, so the emitted bytes are not the hex digits themselves).
+		last := gaugeCells(gaugeWidth, 41)[gaugeWidth-1]
+		wantBg := termenv.RGBColor(last.colour.hex()).Sequence(true)
+		if !strings.Contains(line, wantBg) {
+			t.Errorf("theme %d (%s): bar line does not carry %s, the background of the cell under the overlay",
+				i, themes[i].name, wantBg)
+		}
 	}
 }
