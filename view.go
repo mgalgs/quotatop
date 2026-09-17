@@ -512,20 +512,12 @@ func computeCompactColumns(sources []sourceState, minContent int) compactColumns
 	}
 	// A single long label -- one source concatenating scope and surface onto
 	// its window label (sources.go) -- must not claim so much of the row that
-	// every panel's bar collapses to a stub and loses the forecast overlay.
-	// Cap the label column to a quarter of the narrowest panel's content,
-	// leaving the rest for the percentage and a bar wide enough to still fit
-	// gaugeMinRun plus the ~15-cell forecast headline gaugeMinRun's own
-	// comment sizes for.
-	if maxLabel := minContent/4 - cols.pct - 2; cols.label > maxLabel {
-		cols.label = maxLabel
-	}
-	if cols.label < 0 {
-		cols.label = 0
-	}
-	// Below that cap, the label column can still be too wide for the
-	// narrowest panel to keep a gaugeMinPad-wide bar; give way further. This
-	// is the same rescue compactWindowLine used to compute per panel, moved
+	// every panel's bar collapses below gaugeMinPad. Give way only by the
+	// deficit, i.e. only when the label actually leaves the narrowest panel
+	// short of gaugeMinPad, rather than to a fixed fraction of minContent: a
+	// flat fraction cuts into labels even when the bar already has room to
+	// spare, and does not track gaugeMinPad's own threshold anyway. This is
+	// the same rescue compactWindowLine used to compute per panel, moved
 	// here so every panel shrinks its label column by the same amount.
 	if deficit := gaugeMinPad - (minContent - cols.label - cols.pct - 2); deficit > 0 {
 		cols.label -= deficit

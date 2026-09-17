@@ -1870,3 +1870,27 @@ func TestCompactNarrowWidthKeepsGaugeMinimumByTruncatingLabel(t *testing.T) {
 		}
 	}
 }
+
+// At widths comfortable enough that the bar does not need the room, the full
+// label must survive intact -- a label column sized off a fixed fraction of
+// the panel, rather than off how much the bar actually needs, can cut into
+// labels even when there is plenty of space left over for the bar.
+func TestCompactComfortableWidthKeepsFullLabel(t *testing.T) {
+	isolateStatePath(t)
+	forcedColour(t)
+	now := time.Now()
+	for _, layout := range []string{layoutCompact, layoutCompactVertical} {
+		for _, width := range []int{100, 132} {
+			for _, n := range []int{3, 4} {
+				m := newModel(20*time.Second, loadHistory(""))
+				m.width, m.now, m.layout = width, now, layout
+				m.sources = threeWindowSources(now, n)
+				view := ansiStrip(m.View())
+				if !strings.Contains(view, "Weekly · Fable") {
+					t.Errorf("%s at width %d, %d sources: \"Weekly · Fable\" label was cut even though the panel has room for it:\n%s",
+						layout, width, n, view)
+				}
+			}
+		}
+	}
+}
