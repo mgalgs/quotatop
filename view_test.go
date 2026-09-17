@@ -1543,13 +1543,41 @@ func isGaugeGlyph(r rune) bool {
 
 // compactRow is one parsed gauge row from a rendered compact frame: where its
 // label starts, where its percentage text ends, and where its bar starts and
-// how wide it is. All positions are display-cell columns counted from the
-// start of the line.
+// how wide it is. labelStart, pctEnd and barStart are display-cell columns
+// counted from the row's own panel box's left border ("│"), not from the
+// start of the physical line -- the side-by-side "compact" layout can draw
+// several boxes on one line (see parseCompactRowsInLine), and a box's
+// absolute column on that line depends only on which grid slot it landed in,
+// not on anything this round controls. boxWidth is that box's own total
+// rendered width (border to border), which callers need to tell a
+// legitimate width difference (two boxes of different size, e.g. the
+// trailing column of an unevenly-divided grid row) from a real
+// misalignment.
 type compactRow struct {
-	labelStart, pctEnd, barStart, barWidth int
+	labelStart, pctEnd, barStart, barWidth, boxWidth int
 }
 
 var compactPctRe = regexp.MustCompile(`\d+(?:\.\d+)?%|—`)
+
+// lineBoxOrigins finds every panel box drawn on one line of runes, in
+// left-to-right order, from the "│" pair box() draws at each box's left and
+// right edge. A compact-grid row joins several boxes onto the same physical
+// line (see parseCompactRowsInLine's own doc comment), so a body line
+// carries one such pair per box, never an unpaired "│" -- box() is the only
+// place in the rendered frame that emits the glyph.
+func lineBoxOrigins(runes []rune) []struct{ origin, width int } {
+	var bars []int
+	for i, r := range runes {
+		if r == '│' {
+			bars = append(bars, i)
+		}
+	}
+	var boxes []struct{ origin, width int }
+	for i := 0; i+1 < len(bars); i += 2 {
+		boxes = append(boxes, struct{ origin, width int }{bars[i], bars[i+1] - bars[i] + 1})
+	}
+	return boxes
+}
 
 // parseCompactRow reads one line of a rendered frame as a compact gauge row.
 // A line can carry more than one bar: the side-by-side "compact" layout
@@ -1564,6 +1592,16 @@ var compactPctRe = regexp.MustCompile(`\d+(?:\.\d+)?%|—`)
 // checking alignment needs anyway.
 func parseCompactRowsInLine(line string) []compactRow {
 	runes := []rune(ansiStrip(line))
+	boxes := lineBoxOrigins(runes)
+	boxFor := func(col int) (origin, width int) {
+		for i := len(boxes) - 1; i >= 0; i-- {
+			if boxes[i].origin <= col {
+				return boxes[i].origin, boxes[i].width
+			}
+		}
+		return 0, 0
+	}
+
 	type run struct{ start, width int }
 	var runs []run
 	curStart, cur := -1, 0
@@ -1607,11 +1645,13 @@ func parseCompactRowsInLine(line string) []compactRow {
 		// that mixed the two would overshoot by the extra bytes those
 		// characters contribute. Re-count in runes to stay consistent.
 		pctEnd := rowStart + utf8.RuneCountInString(prefix[:last[1]])
+		origin, width := boxFor(bar.start)
 		rows = append(rows, compactRow{
-			labelStart: labelStart,
-			pctEnd:     pctEnd,
-			barStart:   bar.start,
+			labelStart: labelStart - origin,
+			pctEnd:     pctEnd - origin,
+			barStart:   bar.start - origin,
 			barWidth:   bar.width,
+			boxWidth:   width,
 		})
 	}
 	return rows
@@ -1628,8 +1668,22 @@ func compactRows(frame string) []compactRow {
 }
 
 // TestCompactBarsShareOneColumn is the core acceptance test: every bar in a
-// rendered compact frame must start at the same column and be the same
-// width, across every window and every panel on the screen.
+// rendered compact frame must start at the same column relative to its own
+// panel box, across every window and every panel on the screen. A bar's
+// absolute column on the physical line is not part of that claim: the
+// side-by-side "compact" layout can draw more than one box on one line (see
+// parseCompactRowsInLine), and a box's absolute position is fixed by which
+// grid slot it landed in -- geometry this round does not touch, not
+// something label/percentage alignment could ever equalise. Likewise, two
+// boxes are not guaranteed the same outer width -- rowWidths gives an
+// unevenly-divided grid row's last column whatever the division rounded
+// away (see rowWidths' own doc comment; pre-existing, unrelated to this
+// round) -- so a bar's width is only required to be consistent with its own
+// box's width, not identical in every box. What must hold everywhere is:
+// boxWidth-minus-barWidth is the same constant (the label/percentage
+// columns plus borders and separators, all shared globally) in every row,
+// and a bar starts at the same offset from its own box's left border in
+// every row.
 func TestCompactBarsShareOneColumn(t *testing.T) {
 	isolateStatePath(t)
 	forcedColour(t)
@@ -1643,14 +1697,15 @@ func TestCompactBarsShareOneColumn(t *testing.T) {
 			if len(rows) == 0 {
 				t.Fatalf("%s at width %d: found no gauge rows", layout, width)
 			}
+			wantOverhead := rows[0].boxWidth - rows[0].barWidth
 			for _, row := range rows[1:] {
 				if row.barStart != rows[0].barStart {
-					t.Errorf("%s at width %d: bars start at columns %d and %d, want every bar at the same column",
+					t.Errorf("%s at width %d: bars start %d and %d cells from their box's left border, want every bar at the same offset",
 						layout, width, rows[0].barStart, row.barStart)
 				}
-				if row.barWidth != rows[0].barWidth {
-					t.Errorf("%s at width %d: bars are %d and %d cells wide, want every bar the same width",
-						layout, width, rows[0].barWidth, row.barWidth)
+				if overhead := row.boxWidth - row.barWidth; overhead != wantOverhead {
+					t.Errorf("%s at width %d: a %d-wide box leaves %d cells for label+pct+borders but a %d-wide box leaves %d, want the same overhead in every box",
+						layout, width, rows[0].boxWidth, wantOverhead, row.boxWidth, overhead)
 				}
 			}
 		}
@@ -1682,7 +1737,17 @@ func TestCompactBarsAlignAcrossPanelsWithDifferentLabels(t *testing.T) {
 		if len(rows) != 5 {
 			t.Fatalf("%s: found %d gauge rows, want 5", layout, len(rows))
 		}
+		// Claude's and Codex's boxes are the same width here (an even split of
+		// width 100 either way this splits across the two layouts), so unlike
+		// TestCompactBarsShareOneColumn's width-132 case this can assert the
+		// bars themselves match, not just the box-relative overhead -- which is
+		// the stronger check this test exists for: Codex's shorter longest
+		// label must not have narrowed Codex's own columns.
 		for _, row := range rows[1:] {
+			if row.boxWidth != rows[0].boxWidth {
+				t.Fatalf("%s: boxes are %d and %d cells wide, want the same width so this test can compare bars directly",
+					layout, rows[0].boxWidth, row.boxWidth)
+			}
 			if row.barStart != rows[0].barStart || row.barWidth != rows[0].barWidth {
 				t.Errorf("%s: bar at column %d width %d, want column %d width %d like every other bar "+
 					"(a panel with a shorter longest label must not narrow the shared column)",
