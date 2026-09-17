@@ -481,6 +481,66 @@ func topBorderCounts(view string) []int {
 // regression in the loop at view.go (e.g. one panel per row) would change
 // what actually gets rendered, and only a test that calls View() can catch
 // that.
+// vertical never packs side by side, no matter how wide the terminal is: the
+// equal-width rule that governs the full grid does not apply here, and this
+// layout exists precisely to leave the grid behind.
+// visualExtent is how many display cells a line's non-space content spans, so
+// a test can measure a panel without counting the centering padding
+// PlaceHorizontal adds out to the terminal width. ANSI escapes are skipped.
+func visualExtent(t *testing.T, line string) int {
+	t.Helper()
+	first, last, cell, inEsc := -1, -1, 0, false
+	for _, r := range line {
+		if r == '\x1b' {
+			inEsc = true
+			continue
+		}
+		if inEsc {
+			inEsc = r != 'm'
+			continue
+		}
+		cell++
+		if r != ' ' {
+			if first < 0 {
+				first = cell
+			}
+			last = cell
+		}
+	}
+	if first < 0 {
+		return 0
+	}
+	return last - first + 1
+}
+
+func TestVerticalIsOnePanelPerRowAtAnyWidth(t *testing.T) {
+	now := time.Now()
+	for _, width := range []int{80, 132, 200} {
+		m := newModel(20*time.Second, loadHistory(""))
+		m.width, m.now, m.layout = width, now, layoutVertical
+		m.sources = gridSources(now, 3)
+		got := topBorderCounts(m.View())
+		want := []int{1, 1, 1}
+		if len(got) != len(want) {
+			t.Fatalf("width %d: row panel counts = %v, want %v", width, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Errorf("width %d: row %d has %d panels, want %d (all rows=%v)",
+					width, i, got[i], want[i], got)
+			}
+		}
+		// Centering pads a line with spaces out to the terminal width; the
+		// panel itself -- the line's non-space extent -- must never exceed
+		// maxLayout.
+		for _, line := range strings.Split(m.View(), "\n") {
+			if got := visualExtent(t, line); got > maxLayout {
+				t.Errorf("width %d: panel extent is %d cells, want at most maxLayout (%d)", width, got, maxLayout)
+			}
+		}
+	}
+}
+
 func TestViewRendersThreePanelsAsTwoRows(t *testing.T) {
 	now := time.Now()
 	m := newModel(20*time.Second, loadHistory(""))

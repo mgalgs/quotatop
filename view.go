@@ -664,43 +664,53 @@ func (m model) View() string {
 
 	var rows []string
 	if n := len(m.sources); n > 0 {
-		renderPanel := panel
-		min := minPanel
-		if m.layoutName() == layoutCompact {
-			// Compact reuses the grid's packing arithmetic with its own, smaller
-			// floor; the equal-width rule the trailing row obeys is full-grid
-			// guidance, not a constraint this layout needs.
-			renderPanel, min = panelCompact, compactMinPanel
-		}
-		cols := gridColumns(width, n, min)
-		// Sized once for a full row of cols panels: a short trailing row (the
-		// last row of an n not divisible by cols) gets the same per-panel
-		// width as every row above it, rather than stretching to fill the
-		// width, so a gauge's bar length stays comparable at a glance across
-		// every panel on screen. The trailing row is simply narrower than the
-		// terminal; nothing fills the gap.
-		colWidths := rowWidths(width, cols)
-		for start := 0; start < n; start += cols {
-			end := start + cols
-			if end > n {
-				end = n
+		if m.layoutName() == layoutVertical {
+			// One panel per row, at any width: no grid, no side-by-side packing.
+			// The width still clamps to maxLayout like everything else -- a
+			// panel stretched across a very wide terminal reads badly -- but it
+			// is never split. This layout is about stacking, not filling.
+			for _, source := range m.sources {
+				rows = append(rows, panel(width, source.snap, m.history, m.now, source.loading))
 			}
-			row := m.sources[start:end]
-			widths := colWidths[:len(row)]
-			parts := make([]string, 0, len(row)*2-1)
-			for i, source := range row {
-				if i > 0 {
-					parts = append(parts, strings.Repeat(" ", panelGap))
+		} else {
+			renderPanel := panel
+			min := minPanel
+			if m.layoutName() == layoutCompact {
+				// Compact reuses the grid's packing arithmetic with its own, smaller
+				// floor; the equal-width rule the trailing row obeys is full-grid
+				// guidance, not a constraint this layout needs.
+				renderPanel, min = panelCompact, compactMinPanel
+			}
+			cols := gridColumns(width, n, min)
+			// Sized once for a full row of cols panels: a short trailing row (the
+			// last row of an n not divisible by cols) gets the same per-panel
+			// width as every row above it, rather than stretching to fill the
+			// width, so a gauge's bar length stays comparable at a glance across
+			// every panel on screen. The trailing row is simply narrower than the
+			// terminal; nothing fills the gap.
+			colWidths := rowWidths(width, cols)
+			for start := 0; start < n; start += cols {
+				end := start + cols
+				if end > n {
+					end = n
 				}
-				parts = append(parts, renderPanel(widths[i], source.snap, m.history, m.now, source.loading))
+				row := m.sources[start:end]
+				widths := colWidths[:len(row)]
+				parts := make([]string, 0, len(row)*2-1)
+				for i, source := range row {
+					if i > 0 {
+						parts = append(parts, strings.Repeat(" ", panelGap))
+					}
+					parts = append(parts, renderPanel(widths[i], source.snap, m.history, m.now, source.loading))
+				}
+				joined := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
+				// A short trailing row is narrower than width by design (see above),
+				// so it is padded out here rather than left for PlaceHorizontal
+				// below: that helper centres each line independently, and would
+				// otherwise float this row's panels away from the column they sit
+				// under.
+				rows = append(rows, lipgloss.NewStyle().Width(width).Render(joined))
 			}
-			joined := lipgloss.JoinHorizontal(lipgloss.Top, parts...)
-			// A short trailing row is narrower than width by design (see above),
-			// so it is padded out here rather than left for PlaceHorizontal
-			// below: that helper centres each line independently, and would
-			// otherwise float this row's panels away from the column they sit
-			// under.
-			rows = append(rows, lipgloss.NewStyle().Width(width).Render(joined))
 		}
 	}
 	panels := strings.Join(rows, "\n\n")
