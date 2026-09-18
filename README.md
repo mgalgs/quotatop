@@ -2,7 +2,9 @@
 
 Live quota for your AI coding agents, in one terminal window.
 
-![quotatop showing two Claude accounts and Codex side by side, each window's burn forecast printed inside its gauge bar](docs/screenshot.png)
+<a href="docs/screenshot.png"><img src="docs/screenshot.png" width="600" alt="quotatop showing two Claude accounts and Codex side by side, each window's burn forecast printed inside its gauge bar"></a>
+
+<sub>(click for full size)</sub>
 
 Each gauge runs a green-to-red gradient, the unfilled part is the same
 gradient darkened, and a bar creeping into the red end reads at a glance
