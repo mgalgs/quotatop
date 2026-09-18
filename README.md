@@ -2,29 +2,12 @@
 
 Live quota for your AI coding agents, in one terminal window.
 
-```
-▌ QUOTATOP  host                                                                                              Wed 9:03:25 AM   ↻ 19s
+![quotatop showing two Claude accounts and Codex side by side, each window's burn forecast printed inside its gauge bar](docs/screenshot.png)
 
-╭─ CLAUDE ──────────────────────────────────────────────────────╮  ╭─ CODEX ──────────────────────────────────────────────── team ─╮
-│ 5-hour                                                    31% │  │ 5-hour                                                    85% │
-│ ██████████████████▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │  │ ███████████████████████████████████████████████████▌░░░░░░░░░ │
-│ resets in 36m 34s                                             │  │ resets in 2h 07m                                              │
-│                                                               │  │                                                               │
-│ Weekly                                                    68% │  │ Weekly                                                    49% │
-│ █████████████████████████████████████████▌░░░░░░░░░░░░░░░░░░░ │  │ █████████████████████████████▌░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │
-│ in 4d 10h · +1.1%/h avg → full in 1d 4h (3d 6h short)         │  │ in 5d 11h · +1.4%/h avg → full in 1d 13h (3d 21h short)       │
-│                                                               │  ╰─ reported 3s ago ───────────────────────────── local · extra ─╯
-│ Weekly · Fable                                            28% │                                                                   
-│ █████████████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ │                                                                   
-│ in 4d 10h · +0.5%/h avg → ~77% at reset (2d 2h spare)         │                                                                   
-╰─ fetched 31s ago ─────────────────────── account · 10m cache ─╯                                                                   
-
-r refresh · R force-fresh · ? keys · q quit                                                                tightest codex 5-hour 85%
-```
-
-(Shown without colour. In a colour terminal each gauge is a green-to-red
-gradient, the unfilled part is the same gradient darkened, and a bar creeping
-into the red end reads at a glance without looking at the number.)
+Each gauge runs a green-to-red gradient, the unfilled part is the same
+gradient darkened, and a bar creeping into the red end reads at a glance
+without looking at the number. Where history supports a projection, the
+forecast is printed inside the bar itself.
 
 ## Running it
 
