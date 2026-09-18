@@ -3,14 +3,13 @@
 Live quota for your AI coding agents, in one terminal window.
 
 <p align="center">
-<a href="docs/screenshot.png"><img src="docs/screenshot.png" width="600" alt="quotatop showing two Claude accounts and Codex side by side, each window's burn forecast printed inside its gauge bar"></a>
+<a href="docs/screenshot-full.png"><img src="docs/screenshot-full.png" width="600" alt="quotatop showing two Claude accounts and Codex side by side: sparklines, per-window burn rates, and short/spare forecasts"></a>
 <br><sub>(click for full size)</sub>
 </p>
 
 Each gauge runs a green-to-red gradient, the unfilled part is the same
 gradient darkened, and a bar creeping into the red end reads at a glance
-without looking at the number. Where history supports a projection, the
-forecast is printed inside the bar itself.
+without looking at the number.
 
 ## Running it
 
@@ -40,6 +39,14 @@ Give it its own tmux window and leave it there.
 | `--theme N` | theme index for `--snapshot` (0-6); the t key is the interactive control |
 | `--fresh` | bypass the Claude cache on the first read |
 | `--no-history` | do not read or write the trend file |
+
+The compact layouts squeeze each window onto one line, and the burn forecast
+moves inside the bar itself:
+
+<p align="center">
+<a href="docs/screenshot.png"><img src="docs/screenshot.png" width="600" alt="the compact-vertical layout: one line per window, each burn forecast printed inside its gauge bar"></a>
+<br><sub>(click for full size)</sub>
+</p>
 
 `--snapshot` honours `NO_COLOR` and `CLICOLOR_FORCE`, so it is also the way to
 check a rendering change without driving a terminal.
@@ -149,11 +156,6 @@ such as `QUOTATOP_CODEX_ROOTS`, where an empty environment variable counts as
 unset and falls back to the config file instead of disabling anything.
 
 ## Trend and burn rate
-
-<p align="center">
-<a href="docs/screenshot-full.png"><img src="docs/screenshot-full.png" width="600" alt="the full layout: sparklines, per-window burn rates, and short/spare forecasts for three accounts"></a>
-<br><sub>(click for full size)</sub>
-</p>
 
 Every percentage change is appended to `~/.cache/quotatop/history.jsonl`
 (override with `QUOTATOP_HISTORY`, disable with `--no-history`). That file is
