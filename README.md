@@ -149,6 +149,10 @@ unset and falls back to the config file instead of disabling anything.
 
 ## Trend and burn rate
 
+<a href="docs/screenshot-full.png"><img src="docs/screenshot-full.png" width="600" alt="the full layout: sparklines, per-window burn rates, and short/spare forecasts for three accounts"></a>
+
+<sub>(click for full size)</sub>
+
 Every percentage change is appended to `~/.cache/quotatop/history.jsonl`
 (override with `QUOTATOP_HISTORY`, disable with `--no-history`). That file is
 what makes the sparkline and the burn rate work on the first frame after a
