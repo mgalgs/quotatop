@@ -2,9 +2,10 @@
 
 Live quota for your AI coding agents, in one terminal window.
 
+<p align="center">
 <a href="docs/screenshot.png"><img src="docs/screenshot.png" width="600" alt="quotatop showing two Claude accounts and Codex side by side, each window's burn forecast printed inside its gauge bar"></a>
-
-<sub>(click for full size)</sub>
+<br><sub>(click for full size)</sub>
+</p>
 
 Each gauge runs a green-to-red gradient, the unfilled part is the same
 gradient darkened, and a bar creeping into the red end reads at a glance
@@ -149,9 +150,10 @@ unset and falls back to the config file instead of disabling anything.
 
 ## Trend and burn rate
 
+<p align="center">
 <a href="docs/screenshot-full.png"><img src="docs/screenshot-full.png" width="600" alt="the full layout: sparklines, per-window burn rates, and short/spare forecasts for three accounts"></a>
-
-<sub>(click for full size)</sub>
+<br><sub>(click for full size)</sub>
+</p>
 
 Every percentage change is appended to `~/.cache/quotatop/history.jsonl`
 (override with `QUOTATOP_HISTORY`, disable with `--no-history`). That file is
