@@ -303,11 +303,12 @@ pace holds until reset always outranks one projected to exhaust first,
 regardless of current percentage; ties then go to the lower percentage, and
 any remaining tie keeps the source order from Configuration above.
 
-`--suggest --json` writes the same schema-1 shape `--json` does, with a
-`pick` (or `null` when nothing is routable), the full `ranked` list, and
-`excluded` with each source's reason. Combine with `--fresh` to force a live
-read before a decision that matters; `--suggest` alone does not imply it, the
-same as `--json`. Exit code is `0` once a suggestion was printed, `2` when
+`--suggest --json` writes its own document — `pick` (or `null` when nothing
+is routable), the full `ranked` list, and `excluded` with each source's
+reason — versioned under the same `schema: 1` convention `--json` uses, not
+the same top-level shape. Combine with `--fresh` to force a live read before
+a decision that matters; `--suggest` alone does not imply it, the same as
+`--json`. Exit code is `0` once a suggestion was printed, `2` when
 nothing is routable. Like `--json`, this records a trend sample unless
 `--no-history` is given, and cannot be combined with `--snapshot`.
 

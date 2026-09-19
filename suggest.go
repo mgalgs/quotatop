@@ -6,7 +6,6 @@ import (
 	"os"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -359,18 +358,7 @@ func suggestExitCode(sugg suggestion) int {
 // --suggest run is itself a fetch round the trend and future projections
 // should see.
 func runSuggest(history *History, fresh, recordHistory, jsonOutput bool) int {
-	sources := defaultSources()
-	snaps := make([]Snapshot, len(sources))
-	var wait sync.WaitGroup
-	wait.Add(len(sources))
-	for i, source := range sources {
-		i, source := i, source
-		go func() {
-			defer wait.Done()
-			snaps[i] = source.fetch(fresh)
-		}()
-	}
-	wait.Wait()
+	snaps := fetchAllSources(defaultSources(), fresh)
 	recordJSONSnapshots(history, snaps, recordHistory)
 
 	now := time.Now()

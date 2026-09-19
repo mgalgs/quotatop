@@ -65,6 +65,24 @@ func defaultSources() []sourceState {
 	return append(claudeSourceStates(), codexSourceStates()...)
 }
 
+// fetchAllSources fetches every source concurrently, so a caller does not
+// wait for one source before reading the next. Shared by renderJSON and
+// runSuggest, which fetch the exact same source list and must not drift.
+func fetchAllSources(sources []sourceState, fresh bool) []Snapshot {
+	snaps := make([]Snapshot, len(sources))
+	var wait sync.WaitGroup
+	wait.Add(len(sources))
+	for i, source := range sources {
+		i, source := i, source
+		go func() {
+			defer wait.Done()
+			snaps[i] = source.fetch(fresh)
+		}()
+	}
+	wait.Wait()
+	return snaps
+}
+
 // sortedLabels returns accounts' keys in ascending byte order, so the panel
 // order is stable across runs and machines.
 func sortedLabels(accounts map[string]string) []string {
@@ -406,18 +424,7 @@ func main() {
 // concurrently, so status-line callers do not wait for one source before
 // reading the other.
 func renderJSON(history *History, fresh, recordHistory bool) int {
-	sources := defaultSources()
-	snaps := make([]Snapshot, len(sources))
-	var wait sync.WaitGroup
-	wait.Add(len(sources))
-	for i, source := range sources {
-		i, source := i, source
-		go func() {
-			defer wait.Done()
-			snaps[i] = source.fetch(fresh)
-		}()
-	}
-	wait.Wait()
+	snaps := fetchAllSources(defaultSources(), fresh)
 	recordJSONSnapshots(history, snaps, recordHistory)
 
 	encoder := json.NewEncoder(os.Stdout)
