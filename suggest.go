@@ -139,12 +139,15 @@ func buildSuggestion(snaps []Snapshot, history *History, now time.Time) suggesti
 }
 
 // evaluateSource resolves one snapshot against the policy: either the
-// rankedSource it should contribute, or the reason it was dropped. The four
+// rankedSource it should contribute, or the reason it was dropped. The
 // checks run in the order the policy is specified in, so the reason
 // reported is always the first one that applies.
 func evaluateSource(snap Snapshot, history *History, now time.Time) (rankedSource, string, bool) {
 	if snap.Err != nil {
 		return rankedSource{}, fmt.Sprintf("error: %s", snap.Err), false
+	}
+	if snap.LimitReached != "" {
+		return rankedSource{}, fmt.Sprintf("blocked: %s", snap.LimitReached), false
 	}
 	if len(snap.Windows) == 0 {
 		return rankedSource{}, "no windows", false

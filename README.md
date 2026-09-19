@@ -291,16 +291,17 @@ excluded: claude/work — error: token refresh failed
 It generalizes, to every source, the policy a status-line or dispatcher
 script would otherwise hand-roll against `--json`: drop whatever cannot take
 work, then rank what is left by weekly headroom, lowest first. A source is
-dropped when its fetch errored, it has no weekly window, its weekly window is
-at 100% or more, or its (unexpired) session window is at 100% or more — a
-missing or expired session reading does not itself disqualify a source, since
-it carries no live signal either way. The weekly meter compared is the
-account-wide one: `weekly_all` for Claude (`weekly_scoped` is skipped
-on purpose — it meters one model family, not the account) and `secondary`
-for Codex. Among routable sources, one whose weekly pace holds until reset
-always outranks one projected to exhaust first, regardless of current
-percentage; ties then go to the lower percentage, and any remaining tie
-keeps the source order from Configuration above.
+dropped when its fetch errored, the account itself reports it is blocked
+(rate-limited or otherwise refusing work), it has no weekly window, its
+weekly window is at 100% or more, or its (unexpired) session window is at
+100% or more — a missing or expired session reading does not itself
+disqualify a source, since it carries no live signal either way. The weekly
+meter compared is the account-wide one: `weekly_all` for Claude
+(`weekly_scoped` is skipped on purpose — it meters one model family, not the
+account) and `secondary` for Codex. Among routable sources, one whose weekly
+pace holds until reset always outranks one projected to exhaust first,
+regardless of current percentage; ties then go to the lower percentage, and
+any remaining tie keeps the source order from Configuration above.
 
 `--suggest --json` writes the same schema-1 shape `--json` does, with a
 `pick` (or `null` when nothing is routable), the full `ranked` list, and

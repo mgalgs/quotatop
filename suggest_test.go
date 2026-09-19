@@ -71,6 +71,14 @@ func TestEvaluateSourceExclusionReasons(t *testing.T) {
 			}},
 			reason: "session at 100%",
 		},
+		{
+			name: "limit reached even with percentages well under 100%",
+			snap: Snapshot{Source: "codex", LimitReached: "workspace_member_usage_limit_reached", Windows: []Window{
+				{Key: "secondary", Percent: 10, Length: 168 * time.Hour, ResetsAt: now.Add(24 * time.Hour)},
+				{Key: "primary", Percent: 5},
+			}},
+			reason: "blocked: workspace_member_usage_limit_reached",
+		},
 	}
 
 	for _, tc := range cases {
