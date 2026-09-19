@@ -141,7 +141,10 @@ const claudeCacheTTL = 10 * time.Minute
 // credentials file or the real cache.
 type claudeSource struct {
 	// doRequest performs the usage request; nil uses http.DefaultClient.Do.
-	doRequest       func(*http.Request) (*http.Response, error)
+	doRequest func(*http.Request) (*http.Response, error)
+	// usageURL and oauthURL are overridable for hermetic tests.
+	usageURL        string
+	oauthURL        string
 	credentialsPath string
 	cacheDir        string // base directory the cache file lives in; "" disables the cache entirely
 	account         string // "" unless multi-account configuration names this source
@@ -211,19 +214,11 @@ func fetchClaude(fresh bool) Snapshot { return defaultClaudeSource().fetch(fresh
 // unreadable or tokenless all mean "not signed in"; the file's contents never
 // enter the error.
 func (s claudeSource) accessToken() (string, error) {
-	raw, err := os.ReadFile(s.credentialsPath)
+	credentials, err := s.readClaudeCredentials()
 	if err != nil {
-		return "", errors.New("not signed in to Claude Code (no credentials file)")
+		return "", err
 	}
-	var doc struct {
-		ClaudeAiOauth struct {
-			AccessToken string `json:"accessToken"`
-		} `json:"claudeAiOauth"`
-	}
-	if err := json.Unmarshal(raw, &doc); err != nil || doc.ClaudeAiOauth.AccessToken == "" {
-		return "", errors.New("not signed in to Claude Code (credentials have no Claude token)")
-	}
-	return doc.ClaudeAiOauth.AccessToken, nil
+	return credentials.accessToken, nil
 }
 
 // claudeCache is the on-disk reading. fetched_at is a unix seconds number so
@@ -339,33 +334,55 @@ func (s claudeSource) requestUsage() (claudePayload, error) {
 	if s.doRequest == nil {
 		s.doRequest = http.DefaultClient.Do
 	}
-	token, err := s.accessToken()
+	token, err := s.usableToken(false)
 	if err != nil {
 		return claudePayload{}, err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
-		"https://api.anthropic.com/api/oauth/usage", nil)
+	payload, status, err := s.requestUsageWithToken(token)
+	if err == nil || status != http.StatusUnauthorized {
+		return payload, err
+	}
+	// A valid-looking token can still be revoked early. Redeem once, then
+	// retry once; a second 401 is deliberately returned as-is.
+	if _, err := s.refreshMaterial(); err != nil {
+		return payload, err
+	}
+	token, err = s.usableToken(true)
 	if err != nil {
 		return claudePayload{}, err
+	}
+	payload, _, err = s.requestUsageWithToken(token)
+	return payload, err
+}
+
+func (s claudeSource) requestUsageWithToken(token string) (claudePayload, int, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	url := s.usageURL
+	if url == "" {
+		url = "https://api.anthropic.com/api/oauth/usage"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet,
+		url, nil)
+	if err != nil {
+		return claudePayload{}, 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := s.doRequest(req)
 	if err != nil {
-		return claudePayload{}, err
+		return claudePayload{}, 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return claudePayload{}, fmt.Errorf("Claude usage request failed with HTTP %d", resp.StatusCode)
+		return claudePayload{}, resp.StatusCode, fmt.Errorf("Claude usage request failed with HTTP %d", resp.StatusCode)
 	}
 	var payload claudePayload
 	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return claudePayload{}, errors.New("Claude usage response is not readable JSON")
+		return claudePayload{}, resp.StatusCode, errors.New("Claude usage response is not readable JSON")
 	}
-	return payload, nil
+	return payload, resp.StatusCode, nil
 }
 
 // withPayload turns a payload into the snapshot's windows, mapping each limit

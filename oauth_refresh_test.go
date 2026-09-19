@@ -100,7 +100,7 @@ func TestClaudeExpiredTokenRefreshesThenUsesAndWritesNewCredentials(t *testing.T
 func TestClaudeRefreshPreservesUnknownFieldsAndMode(t *testing.T) {
 	for _, mode := range []os.FileMode{0o600, 0o644} {
 		t.Run(mode.String(), func(t *testing.T) {
-			src, path := oauthFixture(t, mode, true, 0)
+			src, path := oauthFixture(t, mode, true, -1)
 			before := oauthDoc(t, path)
 			var beforeOauth map[string]json.RawMessage
 			json.Unmarshal(before["claudeAiOauth"], &beforeOauth)
@@ -140,7 +140,7 @@ func TestClaudeValidTokenDoesNotRefresh(t *testing.T) {
 }
 
 func TestClaudeRefreshWritesBeforeUsage(t *testing.T) {
-	src, path := oauthFixture(t, 0o600, true, 0)
+	src, path := oauthFixture(t, 0o600, true, -1)
 	src = oauthSource(t, src, func(w http.ResponseWriter, r *http.Request) {
 		var oauth struct {
 			Access string `json:"accessToken"`
@@ -159,7 +159,7 @@ func TestClaudeRefreshWritesBeforeUsage(t *testing.T) {
 }
 
 func TestClaudeConcurrentFetchersRedeemOnce(t *testing.T) {
-	src, _ := oauthFixture(t, 0o600, true, 0)
+	src, _ := oauthFixture(t, 0o600, true, -1)
 	var mu sync.Mutex
 	refreshes := 0
 	src = oauthSource(t, src, func(w http.ResponseWriter, r *http.Request) {
@@ -192,7 +192,7 @@ func TestClaudeConcurrentFetchersRedeemOnce(t *testing.T) {
 }
 
 func TestClaudeCodeWinningRefreshRaceUsesFreshFile(t *testing.T) {
-	src, path := oauthFixture(t, 0o600, true, 0)
+	src, path := oauthFixture(t, 0o600, true, -1)
 	src = oauthSource(t, src, func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer tok-cc" {
 			t.Error("did not use Claude Code token")
@@ -210,7 +210,7 @@ func TestClaudeCodeWinningRefreshRaceUsesFreshFile(t *testing.T) {
 }
 
 func TestClaudeExpiredTokenRefreshFailureGuidesReloginWithoutSecrets(t *testing.T) {
-	src, _ := oauthFixture(t, 0o600, true, 0)
+	src, _ := oauthFixture(t, 0o600, true, -1)
 	src = oauthSource(t, src, oauthUsage, func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusBadRequest) })
 	snap := src.fetch(true)
 	if snap.Err == nil || !strings.Contains(snap.Err.Error(), "re-login") {
@@ -245,9 +245,24 @@ func TestClaudeUsage401RefreshesAndRetriesOnlyOnce(t *testing.T) {
 	if refreshes != 1 || usageCalls != 2 {
 		t.Errorf("refreshes, usage = %d, %d", refreshes, usageCalls)
 	}
-	if _, err := src.requestUsage(); err == nil || refreshes != 1 {
-		t.Errorf("second 401 got err %v and refreshes %d", err, refreshes)
-	}
+
+	t.Run("second 401 is returned", func(t *testing.T) {
+		src, _ := oauthFixture(t, 0o600, true, time.Now().Add(time.Hour).UnixMilli())
+		var calls, redeems int
+		src = oauthSource(t, src, func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			w.WriteHeader(http.StatusUnauthorized)
+		}, func(w http.ResponseWriter, r *http.Request) {
+			redeems++
+			io.WriteString(w, `{"access_token":"tok-new","refresh_token":"rt-2","expires_in":28800}`)
+		})
+		if snap := src.fetch(true); snap.Err == nil || !strings.Contains(snap.Err.Error(), "HTTP 401") {
+			t.Errorf("error = %v", snap.Err)
+		}
+		if redeems != 1 || calls != 2 {
+			t.Errorf("redeems, usage = %d, %d", redeems, calls)
+		}
+	})
 }
 
 func TestClaudeWithoutRefreshTokenDoesNotAttemptRefresh(t *testing.T) {
