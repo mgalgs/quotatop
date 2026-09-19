@@ -67,6 +67,10 @@ nothing:
   minutes in `~/.cache/quotatop/claude-quota.json`. The panel reports when the
   numbers were *observed* (from the cache stamp), not when it asked, so a
   cached reading cannot look fresher than it is.
+
+  When its OAuth token expires, the reader refreshes it with the stored
+  refresh token and writes it back, so an idle account stays readable. On
+  refresh failure, the panel advises re-login in a claude session.
 - **Codex** — the local session logs, walked recursively from `$CODEX_HOME`
   (or `~/.codex`) plus `/sessions`, for the newest recorded rate limits. There
   is no server to ask: Codex only knows its limits when it reports them, which
