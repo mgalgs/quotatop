@@ -293,10 +293,18 @@ script would otherwise hand-roll against `--json`: drop whatever cannot take
 work, then rank what is left by weekly headroom, lowest first. A source is
 dropped when its fetch errored, the account itself reports it is blocked
 (rate-limited or otherwise refusing work), it has no weekly window, its
-weekly window is at 100% or more, or its (unexpired) session window is at
-100% or more — a missing or expired session reading does not itself
-disqualify a source, since it carries no live signal either way. The weekly
-meter compared is the account-wide one: `weekly_all` for Claude
+weekly window is live and at 100% or more, or its (unexpired) session window
+is at 100% or more — a missing or expired session reading does not itself
+disqualify a source, since it carries no live signal either way. An expired
+weekly reading is not just spared from disqualifying the source: its stale
+percent is discarded and replaced with a synthesized 0% for both the
+100%-or-more check and the ranking below, the same substitution `--json`
+reports separately as the window's stale `percent` plus `expired: true` —
+so a source whose weekly window has not been refreshed since it last reset
+can rank *ahead* of one with real headroom to spare. `ranked[].weekly_expired`
+in `--suggest --json` carries that flag through so a consumer can tell a
+synthesized 0% from a measured one. The weekly meter compared is the
+account-wide one: `weekly_all` for Claude
 (`weekly_scoped` is skipped on purpose — it meters one model family, not the
 account) and `secondary` for Codex. Among routable sources, one whose weekly
 pace holds until reset always outranks one projected to exhaust first,

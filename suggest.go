@@ -40,11 +40,12 @@ type rankedSource struct {
 
 	weeklyPercent             float64
 	weeklyWindowKey           string
+	weeklyExpired             bool // the window reset since this reading; weeklyPercent is a synthesized 0, not a live measurement
 	weeklyProjectionValid     bool
 	weeklyExhaustsBeforeReset bool
 
 	sessionState   sessionState
-	sessionPercent float64 // meaningful only when sessionState == sessionOK or sessionResetPending (0 there)
+	sessionPercent float64 // meaningful only when sessionState == sessionOK; 0 otherwise, discarded rather than published
 
 	observedAgeSeconds int64
 }
@@ -197,6 +198,7 @@ func evaluateSource(snap Snapshot, history *History, now time.Time) (rankedSourc
 		credentialsPath:           snap.CredentialsPath,
 		weeklyPercent:             weeklyPercent,
 		weeklyWindowKey:           weeklyWindow.Key,
+		weeklyExpired:             weeklyWindow.Expired,
 		weeklyProjectionValid:     projectionValid,
 		weeklyExhaustsBeforeReset: exhausts,
 		sessionState:              state,
@@ -286,6 +288,7 @@ type jsonSuggestSource struct {
 	Account                   string   `json:"account,omitempty"`
 	CredentialsPath           string   `json:"credentials_path,omitempty"`
 	WeeklyPercent             float64  `json:"weekly_percent"`
+	WeeklyExpired             bool     `json:"weekly_expired,omitempty"`
 	WeeklyExhaustsBeforeReset bool     `json:"weekly_exhausts_before_reset"`
 	WeeklyWindowKey           string   `json:"weekly_window_key"`
 	SessionPercent            *float64 `json:"session_percent"`
@@ -328,12 +331,13 @@ func encodeSuggestSource(rank int, r rankedSource) jsonSuggestSource {
 		Account:                   r.account,
 		CredentialsPath:           r.credentialsPath,
 		WeeklyPercent:             r.weeklyPercent,
+		WeeklyExpired:             r.weeklyExpired,
 		WeeklyExhaustsBeforeReset: r.weeklyExhaustsBeforeReset,
 		WeeklyWindowKey:           r.weeklyWindowKey,
 		SessionState:              string(r.sessionState),
 		ObservedAgeSeconds:        r.observedAgeSeconds,
 	}
-	if r.sessionState != sessionAbsent {
+	if r.sessionState == sessionOK {
 		pct := r.sessionPercent
 		encoded.SessionPercent = &pct
 	}

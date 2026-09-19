@@ -136,6 +136,9 @@ func TestEvaluateSourceExpiredWeeklyScoresZero(t *testing.T) {
 	if ranked.weeklyPercent != 0 {
 		t.Fatalf("weeklyPercent = %v, want 0", ranked.weeklyPercent)
 	}
+	if !ranked.weeklyExpired {
+		t.Fatalf("weeklyExpired = false, want true so a synthesized 0%% can be told apart from a live one")
+	}
 	if ranked.weeklyProjectionValid {
 		t.Fatalf("weeklyProjectionValid = true, want false for an expired window")
 	}
@@ -311,6 +314,11 @@ func TestEncodeSuggestJSONFields(t *testing.T) {
 				weeklyProjectionValid: false, weeklyExhaustsBeforeReset: true,
 				sessionState: sessionAbsent,
 			},
+			{
+				source: "codex", account: "plus", weeklyPercent: 0, weeklyWindowKey: "secondary",
+				weeklyExpired: true, weeklyProjectionValid: false, weeklyExhaustsBeforeReset: false,
+				sessionState: sessionResetPending, sessionPercent: 0,
+			},
 		},
 		excluded: []excludedSource{
 			{source: "claude", account: "work", reason: "error: token refresh failed"},
@@ -345,8 +353,8 @@ func TestEncodeSuggestJSONFields(t *testing.T) {
 	}
 
 	ranked := decoded["ranked"].([]any)
-	if len(ranked) != 2 {
-		t.Fatalf("ranked = %d entries, want 2", len(ranked))
+	if len(ranked) != 3 {
+		t.Fatalf("ranked = %d entries, want 3", len(ranked))
 	}
 	second := ranked[1].(map[string]any)
 	if second["rank"] != float64(2) || second["weekly_exhausts_before_reset"] != true {
@@ -360,6 +368,19 @@ func TestEncodeSuggestJSONFields(t *testing.T) {
 	}
 	if second["session_percent"] != nil {
 		t.Fatalf("ranked[1].session_percent = %v, want null (no session window)", second["session_percent"])
+	}
+	third := ranked[2].(map[string]any)
+	if third["session_state"] != "reset-pending" {
+		t.Fatalf("ranked[2].session_state = %v, want reset-pending", third["session_state"])
+	}
+	if third["session_percent"] != nil {
+		t.Fatalf("ranked[2].session_percent = %v, want null: a reset-pending window's stale reading must not be published as a fabricated 0", third["session_percent"])
+	}
+	if third["weekly_expired"] != true {
+		t.Fatalf("ranked[2].weekly_expired = %v, want true so its weekly_percent:0 reads as synthesized, not measured", third["weekly_expired"])
+	}
+	if second["weekly_expired"] != nil {
+		t.Fatalf("ranked[1].weekly_expired = %v, want omitted for a live weekly window", second["weekly_expired"])
 	}
 
 	excluded := decoded["excluded"].([]any)
