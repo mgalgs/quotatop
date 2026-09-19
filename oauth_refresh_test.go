@@ -265,6 +265,62 @@ func TestClaudeUsage401RefreshesAndRetriesOnlyOnce(t *testing.T) {
 	})
 }
 
+func TestClaudeConcurrentUsage401sRedeemOnce(t *testing.T) {
+	src, _ := oauthFixture(t, 0o600, true, time.Now().Add(time.Hour).UnixMilli())
+	var mu sync.Mutex
+	usageCalls, refreshes := 0, 0
+	bothOldRequests := make(chan struct{})
+	src = oauthSource(t, src, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer tok-new" {
+			oauthUsage(w, r)
+			return
+		}
+		mu.Lock()
+		usageCalls++
+		if usageCalls == 2 {
+			close(bothOldRequests)
+		}
+		mu.Unlock()
+		<-bothOldRequests
+		w.WriteHeader(http.StatusUnauthorized)
+	}, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		refreshes++
+		mu.Unlock()
+		io.WriteString(w, `{"access_token":"tok-new","refresh_token":"rt-2","expires_in":28800}`)
+	})
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for range 2 {
+		wg.Add(1)
+		go func() { defer wg.Done(); errs <- src.fetch(true).Err }()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Error(err)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if refreshes != 1 {
+		t.Errorf("refreshes = %d, want 1", refreshes)
+	}
+}
+
+func TestClaudeUnchangedCredentialAfter401RefreshFailureGuidesRelogin(t *testing.T) {
+	src, _ := oauthFixture(t, 0o600, true, time.Now().Add(time.Hour).UnixMilli())
+	src = oauthSource(t, src, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	})
+	if snap := src.fetch(true); snap.Err == nil || !strings.Contains(snap.Err.Error(), "re-login") {
+		t.Errorf("error = %v", snap.Err)
+	}
+}
+
 func TestClaudeWithoutRefreshTokenDoesNotAttemptRefresh(t *testing.T) {
 	src, _ := oauthFixture(t, 0o600, false, 0)
 	var refreshes int

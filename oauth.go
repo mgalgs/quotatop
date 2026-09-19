@@ -25,6 +25,15 @@ type claudeCredentials struct {
 	expiresAt    int64
 }
 
+// sameClaudeCredentials deliberately includes the refresh token and expiry.
+// An access-token match alone is not enough to tell whether another writer
+// refreshed the credentials between a rejected request and the lock.
+func sameClaudeCredentials(a, b claudeCredentials) bool {
+	return a.accessToken == b.accessToken &&
+		a.refreshToken == b.refreshToken &&
+		a.expiresAt == b.expiresAt
+}
+
 func (s claudeSource) readClaudeCredentials() (claudeCredentials, error) {
 	raw, err := os.ReadFile(s.credentialsPath)
 	if err != nil {
@@ -43,43 +52,35 @@ func (s claudeSource) readClaudeCredentials() (claudeCredentials, error) {
 	return claudeCredentials{doc.ClaudeAiOauth.AccessToken, doc.ClaudeAiOauth.RefreshToken, doc.ClaudeAiOauth.ExpiresAt}, nil
 }
 
-func (s claudeSource) refreshMaterial() (claudeCredentials, error) {
-	credentials, err := s.readClaudeCredentials()
-	if err != nil || credentials.refreshToken == "" || credentials.expiresAt == 0 {
-		return claudeCredentials{}, errors.New("Claude usage request failed with HTTP 401")
-	}
-	return credentials, nil
-}
-
 func (c claudeCredentials) nearExpiry(now time.Time) bool {
 	return now.UnixMilli() >= c.expiresAt-claudeRefreshSkew.Milliseconds()
 }
 
-// usableToken refreshes only at the point a live request needs the token.
-func (s claudeSource) usableToken(force bool) (string, error) {
+// usableCredentials refreshes only at the point a live request needs a token.
+func (s claudeSource) usableCredentials(force bool, rejected claudeCredentials) (claudeCredentials, error) {
 	credentials, err := s.readClaudeCredentials()
 	if err != nil {
-		return "", err
+		return claudeCredentials{}, err
 	}
 	if credentials.refreshToken == "" || credentials.expiresAt == 0 || (!force && !credentials.nearExpiry(time.Now())) {
-		return credentials.accessToken, nil
+		return credentials, nil
 	}
 	if s.cacheDir == "" {
-		return "", errors.New("could not create Claude token refresh lock")
+		return claudeCredentials{}, errors.New("could not create Claude token refresh lock")
 	}
 	sum := sha256.Sum256([]byte(s.credentialsPath))
 	lockBase := filepath.Join(s.cacheDir, fmt.Sprintf("claude-refresh-%x", sum[:]))
 	if err := os.MkdirAll(s.cacheDir, 0o700); err != nil {
-		return "", fmt.Errorf("could not create Claude token refresh lock: %w", err)
+		return claudeCredentials{}, fmt.Errorf("could not create Claude token refresh lock: %w", err)
 	}
-	var token string
+	var usable claudeCredentials
 	err = withHistoryLock(lockBase, func() error {
 		current, err := s.readClaudeCredentials()
 		if err != nil {
 			return err
 		}
-		if !force && !current.nearExpiry(time.Now()) {
-			token = current.accessToken
+		if (!force && !current.nearExpiry(time.Now())) || (force && !sameClaudeCredentials(current, rejected)) {
+			usable = current
 			return nil
 		}
 		refreshed, err := s.redeemClaudeRefreshToken(current.refreshToken)
@@ -87,8 +88,9 @@ func (s claudeSource) usableToken(force bool) (string, error) {
 			if status, ok := oauthHTTPStatus(err); ok && (status == http.StatusBadRequest || status == http.StatusUnauthorized) {
 				// Claude Code may have redeemed the old refresh token while this
 				// process waited for its own lock. Its new file wins.
-				if winner, rereadErr := s.readClaudeCredentials(); rereadErr == nil && !winner.nearExpiry(time.Now()) {
-					token = winner.accessToken
+				if winner, rereadErr := s.readClaudeCredentials(); rereadErr == nil &&
+					((force && !sameClaudeCredentials(winner, rejected)) || (!force && !winner.nearExpiry(time.Now()))) {
+					usable = winner
 					return nil
 				}
 				return fmt.Errorf("Claude token expired and refresh failed (HTTP %d); run a claude session on this account to re-login", status)
@@ -98,13 +100,13 @@ func (s claudeSource) usableToken(force bool) (string, error) {
 		if err := s.writeRefreshedClaudeCredentials(refreshed); err != nil {
 			return err
 		}
-		token = refreshed.accessToken
+		usable = refreshed
 		return nil
 	})
 	if err != nil {
-		return "", err
+		return claudeCredentials{}, err
 	}
-	return token, nil
+	return usable, nil
 }
 
 type oauthHTTPError struct{ status int }

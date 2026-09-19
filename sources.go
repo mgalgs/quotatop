@@ -334,24 +334,24 @@ func (s claudeSource) requestUsage() (claudePayload, error) {
 	if s.doRequest == nil {
 		s.doRequest = http.DefaultClient.Do
 	}
-	token, err := s.usableToken(false)
+	credentials, err := s.usableCredentials(false, claudeCredentials{})
 	if err != nil {
 		return claudePayload{}, err
 	}
-	payload, status, err := s.requestUsageWithToken(token)
+	payload, status, err := s.requestUsageWithToken(credentials.accessToken)
 	if err == nil || status != http.StatusUnauthorized {
 		return payload, err
 	}
 	// A valid-looking token can still be revoked early. Redeem once, then
 	// retry once; a second 401 is deliberately returned as-is.
-	if _, err := s.refreshMaterial(); err != nil {
+	if credentials.refreshToken == "" || credentials.expiresAt == 0 {
 		return payload, err
 	}
-	token, err = s.usableToken(true)
+	credentials, err = s.usableCredentials(true, credentials)
 	if err != nil {
 		return claudePayload{}, err
 	}
-	payload, _, err = s.requestUsageWithToken(token)
+	payload, _, err = s.requestUsageWithToken(credentials.accessToken)
 	return payload, err
 }
 
