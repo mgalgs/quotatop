@@ -314,7 +314,10 @@ any remaining tie keeps the source order from Configuration above.
 `--suggest --json` writes its own document — `pick` (or `null` when nothing
 is routable), the full `ranked` list, and `excluded` with each source's
 reason — versioned under the same `schema: 1` convention `--json` uses, not
-the same top-level shape. Combine with `--fresh` to force a live read before
+the same top-level shape. Every entry in `ranked` and `excluded` carries the
+same `id` a plain `--json` document does, so a `pick.id` can be looked up
+directly in `--json`'s `sources[].id` without reconcatenating `source` and
+`account`. Combine with `--fresh` to force a live read before
 a decision that matters; `--suggest` alone does not imply it, the same as
 `--json`. Exit code is `0` once a suggestion was printed, `2` when
 nothing is routable. Like `--json`, this records a trend sample unless

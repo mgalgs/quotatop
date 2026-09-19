@@ -34,6 +34,7 @@ const (
 // has no JSON field of its own, since weeklyExhaustsBeforeReset alone is
 // enough for the JSON consumer's ranking logic.
 type rankedSource struct {
+	identity        string // Snapshot.Identity(): "source" or "source/account", the one definition of the pairing
 	source          string
 	account         string
 	credentialsPath string
@@ -53,9 +54,10 @@ type rankedSource struct {
 // excludedSource is one source the policy dropped, with the reason a human
 // or a consumer can act on -- never silent.
 type excludedSource struct {
-	source  string
-	account string
-	reason  string
+	identity string // Snapshot.Identity(): "source" or "source/account", the one definition of the pairing
+	source   string
+	account  string
+	reason   string
 }
 
 // suggestion is the full policy outcome for one fetch round: the routable
@@ -118,7 +120,7 @@ func buildSuggestion(snaps []Snapshot, history *History, now time.Time) suggesti
 	for _, snap := range snaps {
 		ranked, reason, ok := evaluateSource(snap, history, now)
 		if !ok {
-			result.excluded = append(result.excluded, excludedSource{source: snap.Source, account: snap.Account, reason: reason})
+			result.excluded = append(result.excluded, excludedSource{identity: snap.Identity(), source: snap.Source, account: snap.Account, reason: reason})
 			continue
 		}
 		candidates = append(candidates, ranked)
@@ -193,6 +195,7 @@ func evaluateSource(snap Snapshot, history *History, now time.Time) (rankedSourc
 	}
 
 	return rankedSource{
+		identity:                  snap.Identity(),
 		source:                    snap.Source,
 		account:                   snap.Account,
 		credentialsPath:           snap.CredentialsPath,
@@ -205,15 +208,6 @@ func evaluateSource(snap Snapshot, history *History, now time.Time) (rankedSourc
 		sessionPercent:            sessionPercent,
 		observedAgeSeconds:        age,
 	}, "", true
-}
-
-// suggestName is the "<source>" or "<source>/<account>" label both render
-// modes use to name a source.
-func suggestName(source, account string) string {
-	if account == "" {
-		return source
-	}
-	return source + "/" + account
 }
 
 func weeklyProjectionWord(valid, exhausts bool) string {
@@ -261,12 +255,12 @@ func renderSuggestText(sugg suggestion) string {
 			fmt.Fprintf(&b, "  %d. ", i+1)
 		}
 		fmt.Fprintf(&b, "%s weekly=%.0f%% %s %s%s\n",
-			suggestName(r.source, r.account), r.weeklyPercent,
+			r.identity, r.weeklyPercent,
 			weeklyProjectionWord(r.weeklyProjectionValid, r.weeklyExhaustsBeforeReset),
 			sessionField(r), ageSuffix(r.observedAgeSeconds))
 	}
 	for _, e := range sugg.excluded {
-		fmt.Fprintf(&b, "excluded: %s — %s\n", suggestName(e.source, e.account), e.reason)
+		fmt.Fprintf(&b, "excluded: %s — %s\n", e.identity, e.reason)
 	}
 	return b.String()
 }
@@ -285,6 +279,7 @@ type jsonSuggestDoc struct {
 type jsonSuggestSource struct {
 	Rank                      int      `json:"rank"`
 	Source                    string   `json:"source"`
+	ID                        string   `json:"id"`
 	Account                   string   `json:"account,omitempty"`
 	CredentialsPath           string   `json:"credentials_path,omitempty"`
 	WeeklyPercent             float64  `json:"weekly_percent"`
@@ -298,6 +293,7 @@ type jsonSuggestSource struct {
 
 type jsonSuggestExcluded struct {
 	Source  string `json:"source"`
+	ID      string `json:"id"`
 	Account string `json:"account,omitempty"`
 	Reason  string `json:"reason"`
 }
@@ -319,7 +315,7 @@ func encodeSuggestJSON(sugg suggestion, now time.Time) jsonSuggestDoc {
 		doc.Pick = &pick
 	}
 	for _, e := range sugg.excluded {
-		doc.Excluded = append(doc.Excluded, jsonSuggestExcluded{Source: e.source, Account: e.account, Reason: e.reason})
+		doc.Excluded = append(doc.Excluded, jsonSuggestExcluded{Source: e.source, ID: e.identity, Account: e.account, Reason: e.reason})
 	}
 	return doc
 }
@@ -328,6 +324,7 @@ func encodeSuggestSource(rank int, r rankedSource) jsonSuggestSource {
 	encoded := jsonSuggestSource{
 		Rank:                      rank,
 		Source:                    r.source,
+		ID:                        r.identity,
 		Account:                   r.account,
 		CredentialsPath:           r.credentialsPath,
 		WeeklyPercent:             r.weeklyPercent,

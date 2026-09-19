@@ -272,21 +272,34 @@ func TestSnapshotFlagsBeatPersistedState(t *testing.T) {
 // a --json call touching the file would be both pointless and a write
 // amplification: a state file that does not exist must not come into
 // existence as a side effect of one.
-func TestJSONDoesNotCreateStateFile(t *testing.T) {
+// Both --json and --suggest exit in main() above the loadState call, per the
+// comment there: neither renders a frame, and a status-line or dispatcher
+// caller running on a timer must not be reading or writing preferences. This
+// pins that invariant for both flags so a change that moves either dispatch
+// below loadState fails a test rather than only a comment.
+func TestNoTUIFlagsDoNotCreateStateFile(t *testing.T) {
 	bin := filepath.Join(t.TempDir(), "quotatop")
 	if out, err := exec.Command("go", "build", "-o", bin, ".").CombinedOutput(); err != nil {
 		t.Fatalf("go build: %v\n%s", err, out)
 	}
-	dir := t.TempDir()
-	statePath := filepath.Join(dir, "state.json")
-	cmd := exec.Command(bin, "--json", "--no-history")
-	cmd.Env = childEnv(dir, statePath)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("quotatop --json: %v\n%s", err, out)
-	}
-	if _, err := os.Lstat(statePath); !os.IsNotExist(err) {
-		t.Errorf("--json created the state file: %v", err)
+	for _, flag := range []string{"--json", "--suggest"} {
+		t.Run(flag, func(t *testing.T) {
+			dir := t.TempDir()
+			statePath := filepath.Join(dir, "state.json")
+			cmd := exec.Command(bin, flag, "--no-history")
+			cmd.Env = childEnv(dir, statePath)
+			out, err := cmd.CombinedOutput()
+			// --suggest exits 2 when nothing is routable, which is expected
+			// under the fake, sourceless HOME this test runs against.
+			if err != nil {
+				if exitErr, ok := err.(*exec.ExitError); !ok || exitErr.ExitCode() != 2 {
+					t.Fatalf("quotatop %s: %v\n%s", flag, err, out)
+				}
+			}
+			if _, err := os.Lstat(statePath); !os.IsNotExist(err) {
+				t.Errorf("%s created the state file: %v", flag, err)
+			}
+		})
 	}
 }
 

@@ -390,10 +390,12 @@ func main() {
 	}
 
 	// The persisted preferences apply to this run. The read degrades
-	// silently to the defaults, and the --json path above has already
-	// exited without touching the state file: it renders no frame, and a
-	// status-line caller running every 60 seconds must not be reading or
-	// writing preferences.
+	// silently to the defaults, and the --suggest and --json paths above
+	// have already exited without touching the state file: neither renders
+	// a frame, and a status-line or dispatcher caller running every 60
+	// seconds must not be reading or writing preferences. Keep both of
+	// those dispatches above this line -- do not move either below
+	// loadState even to let a suggestion see persisted preferences.
 	state := loadState(statePath())
 	themeIndex = state.Theme
 	m := newModel(*interval, loadHistory(path))

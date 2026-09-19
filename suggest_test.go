@@ -256,18 +256,18 @@ func TestRenderSuggestTextFrozenFormat(t *testing.T) {
 	sugg := suggestion{
 		ranked: []rankedSource{
 			{
-				source: "claude", account: "mitch", weeklyPercent: 35,
+				identity: "claude/mitch", source: "claude", account: "mitch", weeklyPercent: 35,
 				weeklyProjectionValid: true, weeklyExhaustsBeforeReset: false,
 				sessionState: sessionOK, sessionPercent: 9,
 			},
 			{
-				source: "codex", account: "plus", weeklyPercent: 39,
+				identity: "codex/plus", source: "codex", account: "plus", weeklyPercent: 39,
 				weeklyProjectionValid: true, weeklyExhaustsBeforeReset: false,
 				sessionState: sessionResetPending,
 			},
 		},
 		excluded: []excludedSource{
-			{source: "claude", account: "work", reason: "error: token refresh failed"},
+			{identity: "claude/work", source: "claude", account: "work", reason: "error: token refresh failed"},
 		},
 	}
 
@@ -284,7 +284,7 @@ func TestRenderSuggestTextAgeSuffixAndNoSession(t *testing.T) {
 	sugg := suggestion{
 		ranked: []rankedSource{
 			{
-				source: "codex", weeklyPercent: 12,
+				identity: "codex", source: "codex", weeklyPercent: 12,
 				weeklyProjectionValid: false, weeklyExhaustsBeforeReset: false,
 				sessionState: sessionAbsent, observedAgeSeconds: 2*3600 + 1800,
 			},
@@ -303,25 +303,25 @@ func TestEncodeSuggestJSONFields(t *testing.T) {
 	sugg := suggestion{
 		ranked: []rankedSource{
 			{
-				source: "claude", account: "mitch", credentialsPath: "/home/mitch/.claude/.credentials.json",
+				identity: "claude/mitch", source: "claude", account: "mitch", credentialsPath: "/home/mitch/.claude/.credentials.json",
 				weeklyPercent: 35, weeklyWindowKey: "weekly_all",
 				weeklyProjectionValid: true, weeklyExhaustsBeforeReset: false,
 				sessionState: sessionOK, sessionPercent: sessionPct,
 				observedAgeSeconds: 153,
 			},
 			{
-				source: "codex", weeklyPercent: 39, weeklyWindowKey: "secondary",
+				identity: "codex", source: "codex", weeklyPercent: 39, weeklyWindowKey: "secondary",
 				weeklyProjectionValid: false, weeklyExhaustsBeforeReset: true,
 				sessionState: sessionAbsent,
 			},
 			{
-				source: "codex", account: "plus", weeklyPercent: 0, weeklyWindowKey: "secondary",
+				identity: "codex/plus", source: "codex", account: "plus", weeklyPercent: 0, weeklyWindowKey: "secondary",
 				weeklyExpired: true, weeklyProjectionValid: false, weeklyExhaustsBeforeReset: false,
 				sessionState: sessionResetPending, sessionPercent: 0,
 			},
 		},
 		excluded: []excludedSource{
-			{source: "claude", account: "work", reason: "error: token refresh failed"},
+			{identity: "claude/work", source: "claude", account: "work", reason: "error: token refresh failed"},
 		},
 	}
 
@@ -341,6 +341,9 @@ func TestEncodeSuggestJSONFields(t *testing.T) {
 	pick := decoded["pick"].(map[string]any)
 	if pick["source"] != "claude" || pick["account"] != "mitch" || pick["rank"] != float64(1) {
 		t.Fatalf("pick = %+v", pick)
+	}
+	if pick["id"] != "claude/mitch" {
+		t.Fatalf("pick.id = %v, want claude/mitch so a --json consumer can match on the same id without reconcatenating source and account", pick["id"])
 	}
 	if pick["credentials_path"] != "/home/mitch/.claude/.credentials.json" {
 		t.Fatalf("pick.credentials_path = %v", pick["credentials_path"])
@@ -390,6 +393,9 @@ func TestEncodeSuggestJSONFields(t *testing.T) {
 	exc := excluded[0].(map[string]any)
 	if exc["source"] != "claude" || exc["account"] != "work" || exc["reason"] != "error: token refresh failed" {
 		t.Fatalf("excluded[0] = %+v", exc)
+	}
+	if exc["id"] != "claude/work" {
+		t.Fatalf("excluded[0].id = %v, want claude/work", exc["id"])
 	}
 }
 
