@@ -33,6 +33,7 @@ Give it its own tmux window and leave it there.
 | `--interval 20s` | how often to poll all sources |
 | `--snapshot` | render one frame to stdout and exit — no TUI |
 | `--json` | write one JSON document to stdout and exit — no TUI |
+| `--suggest` | print a ranked account suggestion and exit — no TUI; add `--json` for a document |
 | `--width N` | width for `--snapshot` (0 detects the terminal, falls back to the widest layout) |
 | `--height N` | height for `--snapshot` (0 = no height limit) |
 | `--layout NAME` | layout for `--snapshot`: `full`, `compact` or `vertical` (default `full`) |
@@ -274,6 +275,40 @@ on a timer keeps the history useful. Writers serialize on a lock file beside
 the history, and a compaction always re-reads under that lock, so several
 processes writing at once cannot drop each other's samples. Pass `--no-history`
 to read and write nothing.
+
+## Account suggestion
+
+`--suggest` fetches every configured source, the same way `--json` does, and
+prints a deterministic answer to "which account should the next piece of work
+draw?" — no TUI:
+
+```
+pick: claude/mitch weekly=35% holds-to-reset session=9%
+  2. codex/plus weekly=39% holds-to-reset session=reset-pending
+excluded: claude/work — error: token refresh failed
+```
+
+It generalizes, to every source, the policy a status-line or dispatcher
+script would otherwise hand-roll against `--json`: drop whatever cannot take
+work, then rank what is left by weekly headroom, lowest first. A source is
+dropped when its fetch errored, it has no weekly window, its weekly window is
+at 100% or more, or its (unexpired) session window is at 100% or more — a
+missing or expired session reading does not itself disqualify a source, since
+it carries no live signal either way. The weekly meter compared is the
+account-wide one: `weekly_all` for Claude (`weekly_scoped` is skipped
+on purpose — it meters one model family, not the account) and `secondary`
+for Codex. Among routable sources, one whose weekly pace holds until reset
+always outranks one projected to exhaust first, regardless of current
+percentage; ties then go to the lower percentage, and any remaining tie
+keeps the source order from Configuration above.
+
+`--suggest --json` writes the same schema-1 shape `--json` does, with a
+`pick` (or `null` when nothing is routable), the full `ranked` list, and
+`excluded` with each source's reason. Combine with `--fresh` to force a live
+read before a decision that matters; `--suggest` alone does not imply it, the
+same as `--json`. Exit code is `0` once a suggestion was printed, `2` when
+nothing is routable. Like `--json`, this records a trend sample unless
+`--no-history` is given, and cannot be combined with `--snapshot`.
 
 ## Platform support
 
