@@ -65,6 +65,24 @@ func defaultSources() []sourceState {
 	return append(claudeSourceStates(), codexSourceStates()...)
 }
 
+// fetchAllSources fetches every source concurrently, so a caller does not
+// wait for one source before reading the next. Shared by renderJSON and
+// runSuggest, which fetch the exact same source list and must not drift.
+func fetchAllSources(sources []sourceState, fresh bool) []Snapshot {
+	snaps := make([]Snapshot, len(sources))
+	var wait sync.WaitGroup
+	wait.Add(len(sources))
+	for i, source := range sources {
+		i, source := i, source
+		go func() {
+			defer wait.Done()
+			snaps[i] = source.fetch(fresh)
+		}()
+	}
+	wait.Wait()
+	return snaps
+}
+
 // sortedLabels returns accounts' keys in ascending byte order, so the panel
 // order is stable across runs and machines.
 func sortedLabels(accounts map[string]string) []string {
@@ -329,6 +347,7 @@ func main() {
 	interval := flag.Duration("interval", 20*time.Second, "how often to poll all sources")
 	snapshot := flag.Bool("snapshot", false, "render one frame to stdout and exit (no TUI)")
 	jsonOutput := flag.Bool("json", false, "write one JSON document to stdout and exit (no TUI)")
+	suggest := flag.Bool("suggest", false, "print a ranked account suggestion and exit (no TUI); combine with --json for a machine-readable document")
 	fresh := flag.Bool("fresh", false, "bypass the Claude 10-minute quota cache on the first read")
 	width := flag.Int("width", 0, "width for --snapshot (0 = detect, fall back to the widest layout)")
 	height := flag.Int("height", 0, "height for --snapshot (0 = no height limit)")
@@ -354,20 +373,29 @@ func main() {
 		fmt.Fprintln(os.Stderr, "quotatop: --json and --snapshot cannot be used together")
 		os.Exit(2)
 	}
+	if *suggest && *snapshot {
+		fmt.Fprintln(os.Stderr, "quotatop: --suggest and --snapshot cannot be used together")
+		os.Exit(2)
+	}
 
 	path := defaultHistoryPath()
 	if *noHistory {
 		path = ""
+	}
+	if *suggest {
+		os.Exit(runSuggest(loadAppendOnlyHistory(path), *fresh, !*noHistory, *jsonOutput))
 	}
 	if *jsonOutput {
 		os.Exit(renderJSON(loadAppendOnlyHistory(path), *fresh, !*noHistory))
 	}
 
 	// The persisted preferences apply to this run. The read degrades
-	// silently to the defaults, and the --json path above has already
-	// exited without touching the state file: it renders no frame, and a
-	// status-line caller running every 60 seconds must not be reading or
-	// writing preferences.
+	// silently to the defaults, and the --suggest and --json paths above
+	// have already exited without touching the state file: neither renders
+	// a frame, and a status-line or dispatcher caller running every 60
+	// seconds must not be reading or writing preferences. Keep both of
+	// those dispatches above this line -- do not move either below
+	// loadState even to let a suggestion see persisted preferences.
 	state := loadState(statePath())
 	themeIndex = state.Theme
 	m := newModel(*interval, loadHistory(path))
@@ -398,18 +426,7 @@ func main() {
 // concurrently, so status-line callers do not wait for one source before
 // reading the other.
 func renderJSON(history *History, fresh, recordHistory bool) int {
-	sources := defaultSources()
-	snaps := make([]Snapshot, len(sources))
-	var wait sync.WaitGroup
-	wait.Add(len(sources))
-	for i, source := range sources {
-		i, source := i, source
-		go func() {
-			defer wait.Done()
-			snaps[i] = source.fetch(fresh)
-		}()
-	}
-	wait.Wait()
+	snaps := fetchAllSources(defaultSources(), fresh)
 	recordJSONSnapshots(history, snaps, recordHistory)
 
 	encoder := json.NewEncoder(os.Stdout)
