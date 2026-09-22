@@ -203,19 +203,27 @@ func TestClaudeRateLimitHonoursRetryAfter(t *testing.T) {
 	}
 }
 
-// A forced read ignores the backoff, and a success clears it.
-func TestClaudeFreshReadClearsBackoff(t *testing.T) {
+// --fresh skips the cache but not the backoff: scripts pass it. Only clearing
+// the backoff (the R key) lets a request through, and a success keeps it clear.
+func TestClaudeFreshReadHonoursBackoff(t *testing.T) {
 	stub := &claudeStub{status: 200, body: realisticClaudePayload}
 	src := claudeTestSource(t, stub)
 	src.writeBackoff(time.Now().Add(time.Hour))
+	if snap := src.fetch(true); snap.Err == nil {
+		t.Error("a fresh read during backoff with no cache must be an error")
+	}
+	if stub.calls != 0 {
+		t.Fatalf("a fresh read during backoff made %d requests, want 0", stub.calls)
+	}
+	src.clearBackoff()
 	if snap := src.fetch(true); snap.Err != nil || snap.Warning != "" {
-		t.Fatalf("fresh read: err=%v warning=%q", snap.Err, snap.Warning)
+		t.Fatalf("fresh read after clearing: err=%v warning=%q", snap.Err, snap.Warning)
 	}
 	if stub.calls != 1 {
-		t.Errorf("a fresh read during backoff made %d requests, want 1", stub.calls)
+		t.Errorf("a fresh read after clearing made %d requests, want 1", stub.calls)
 	}
 	if !src.readBackoff().IsZero() {
-		t.Error("a successful read left the backoff in place")
+		t.Error("a successful read left a backoff in place")
 	}
 }
 

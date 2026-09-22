@@ -22,7 +22,7 @@ Give it its own tmux window and leave it there.
 | Key | Does |
 |-----|------|
 | `r` | refresh all sources now |
-| `R` | refresh Claude past its 10-minute cache (a real API call) |
+| `R` | refresh Claude past its 10-minute cache and any 429 backoff (a real API call) |
 | `l` | cycle layout: full, compact, vertical (the choice is remembered across runs) |
 | `t` | cycle colour themes (the choice is remembered across runs) |
 | `?` | toggle the key list and data-source notes |
@@ -38,7 +38,7 @@ Give it its own tmux window and leave it there.
 | `--height N` | height for `--snapshot` (0 = no height limit) |
 | `--layout NAME` | layout for `--snapshot`: `full`, `compact` or `vertical` (default `full`) |
 | `--theme N` | theme index for `--snapshot` (0-6); the t key is the interactive control |
-| `--fresh` | bypass the Claude cache on the first read |
+| `--fresh` | bypass the Claude cache on the first read (not a 429 backoff) |
 | `--no-history` | do not read or write the trend file |
 
 The compact layouts squeeze each window onto one line, and the burn forecast
@@ -70,7 +70,8 @@ nothing:
   panel keeps showing the last cached reading, at its real age, with a warning.
   After an HTTP 429 every quotatop process holds off (for the server's
   `Retry-After`, else 5 minutes, recorded in `claude-backoff.json` beside the
-  cache) instead of asking again every poll.
+  cache) instead of asking again every poll. `--fresh` does not override the
+  backoff; the `R` key does.
 
   When its OAuth token expires, the reader refreshes it with the stored
   refresh token and writes it back, so an idle account stays readable. On
@@ -85,8 +86,8 @@ nothing:
 > interface, and neither vendor owes this tool stability. If a panel starts
 > reporting an error after an update, that is the most likely reason.
 
-A source that fails turns into a red panel with the error in it; the other
-panel keeps running.
+A source that fails with nothing cached turns into a red panel with the error
+in it; the other panels keep running.
 
 ## Configuration
 

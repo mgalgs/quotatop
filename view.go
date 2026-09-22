@@ -763,7 +763,7 @@ func (m model) footerLine(width int) string {
 func (m model) helpBody(width int) string {
 	rows := [][2]string{
 		{"r", "refresh all sources now"},
-		{"R", "refresh Claude past its 10-minute cache (hits the API)"},
+		{"R", "refresh Claude past its cache and any 429 backoff (hits the API)"},
 		{"l", "cycle layout: " + strings.Join(layouts, ", ")},
 		{"t", "cycle themes"},
 		{"?", "toggle this help"},

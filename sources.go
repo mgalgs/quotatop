@@ -309,6 +309,8 @@ func defaultClaudeSource() claudeSource {
 // the new reading still lands in it.
 func fetchClaude(fresh bool) Snapshot { return defaultClaudeSource().fetch(fresh) }
 
+func clearClaudeBackoff() { defaultClaudeSource().clearBackoff() }
+
 // accessToken pulls the Claude token out of the credentials file. Missing,
 // unreadable or tokenless all mean "not signed in"; the file's contents never
 // enter the error.
@@ -409,11 +411,13 @@ func (s claudeSource) fetch(fresh bool) Snapshot {
 			// not a red panel for the rest of the TTL: fall through and
 			// refetch.
 		}
-		// Asking again while rate limited only extends the limit.
-		if until := s.readBackoff(); now.Before(until) {
-			err := fmt.Errorf("rate limited (HTTP 429), next try in %s", compactDuration(until.Sub(now)))
-			return s.fallBack(snap, cached, fetchedAt, haveCache, err)
-		}
+	}
+	// Asking again while rate limited only extends the limit. fresh does not
+	// bypass this: scripts pass --fresh, and only the TUI's R key, which
+	// clears the backoff first, may override it.
+	if until := s.readBackoff(); now.Before(until) {
+		err := fmt.Errorf("rate limited (HTTP 429), next try in %s", compactDuration(until.Sub(now)))
+		return s.fallBack(snap, cached, fetchedAt, haveCache, err)
 	}
 	payload, err := s.requestUsage()
 	if err != nil {

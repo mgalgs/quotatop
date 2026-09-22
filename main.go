@@ -38,6 +38,9 @@ type sourceState struct {
 	loading bool
 	due     time.Time
 	fetch   func(fresh bool) Snapshot
+	// clearBackoff drops a 429 backoff so the next fetch asks the server
+	// again; nil for sources that never back off.
+	clearBackoff func()
 }
 
 type model struct {
@@ -101,14 +104,14 @@ func sortedLabels(accounts map[string]string) []string {
 func claudeSourceStates() []sourceState {
 	accounts := settingsWithPrefix("QUOTATOP_CLAUDE_ACCOUNT_")
 	if len(accounts) == 0 {
-		return []sourceState{{fetch: fetchClaude}}
+		return []sourceState{{fetch: fetchClaude, clearBackoff: clearClaudeBackoff}}
 	}
 	states := make([]sourceState, 0, len(accounts))
 	for _, label := range sortedLabels(accounts) {
 		source := defaultClaudeSource()
 		source.credentialsPath = accounts[label]
 		source.account = label
-		states = append(states, sourceState{fetch: source.fetch})
+		states = append(states, sourceState{fetch: source.fetch, clearBackoff: source.clearBackoff})
 	}
 	return states
 }
@@ -228,6 +231,12 @@ func (m model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			return m, m.refresh(false)
 		case "R":
+			// A person asking outright overrides a 429 backoff; --fresh does not.
+			for _, source := range m.sources {
+				if source.clearBackoff != nil && !source.loading {
+					source.clearBackoff()
+				}
+			}
 			return m, m.refresh(true)
 		case "l":
 			// Cycle layouts, wrapping at the end. One key, cycle, wrap: there
@@ -328,7 +337,7 @@ const usageText = `quotatop -- live Claude and Codex quota in one window.
 
 Usage: quotatop [options]
 
-Keys:  r refresh · R refresh Claude past its cache · l layout · t themes · ? keys · q quit
+Keys:  r refresh · R refresh Claude past its cache and 429 backoff · l layout · t themes · ? keys · q quit
 
 Options:
 `
