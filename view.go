@@ -429,10 +429,7 @@ func panel(width int, snap *Snapshot, history *History, now time.Time, loading b
 		}
 		body = append(body, "", currentTheme().dim.Render("press r to retry"))
 	} else {
-		for i, window := range snap.Windows {
-			if i > 0 {
-				body = append(body, "")
-			}
+		for _, window := range snap.Windows {
 			body = append(body, windowLines(content, snap.Identity(), window, history, now)...)
 		}
 		// A block and a warning are independent facts -- the only warning the
@@ -440,10 +437,12 @@ func panel(width int, snap *Snapshot, history *History, now time.Time, loading b
 		// everything else in the panel, including a block riding on that same
 		// truncated log. Neither should swallow the other.
 		if snap.LimitReached != "" {
-			body = append(body, "", currentTheme().err.Render(truncate("blocked: "+humanizeReason(snap.LimitReached), content)))
+			body = append(body, currentTheme().err.Render(truncate("blocked: "+humanizeReason(snap.LimitReached), content)))
 		}
 		if snap.Warning != "" {
-			body = append(body, "", currentTheme().wrn.Render(truncate(snap.Warning, content)))
+			for _, line := range wrap(snap.Warning, content) {
+				body = append(body, currentTheme().wrn.Render(line))
+			}
 		}
 	}
 
