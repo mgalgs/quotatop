@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -166,11 +167,22 @@ type claudeSource struct {
 // "%" is escaped first, so two distinct accounts -- e.g. "a/b" and "a_b" --
 // can never collapse onto the same filename and share a cache.
 func claudeCacheFileName(account string) string {
+	return claudeStateFileName("claude-quota", account)
+}
+
+// claudeBackoffFileName names the file recording that one Claude account is
+// rate limited. Its prefix differs from the cache's, so no account name can
+// make one file's name collide with the other's.
+func claudeBackoffFileName(account string) string {
+	return claudeStateFileName("claude-backoff", account)
+}
+
+func claudeStateFileName(prefix, account string) string {
 	if account == "" {
-		return "claude-quota.json"
+		return prefix + ".json"
 	}
 	safe := strings.NewReplacer("%", "%25", "/", "%2F", "\\", "%5C").Replace(account)
-	return "claude-quota-" + safe + ".json"
+	return prefix + "-" + safe + ".json"
 }
 
 // resolvedCachePath is the cache file this source actually reads and writes.
@@ -187,6 +199,93 @@ func (s claudeSource) resolvedCachePath() string {
 		return ""
 	}
 	return filepath.Join(s.cacheDir, claudeCacheFileName(s.account))
+}
+
+func (s claudeSource) resolvedBackoffPath() string {
+	if s.cacheDir == "" {
+		return ""
+	}
+	return filepath.Join(s.cacheDir, claudeBackoffFileName(s.account))
+}
+
+// claudeBackoffDefault is how long to hold off after a 429 that carries no
+// usable Retry-After; claudeBackoffMax caps one that asks for longer.
+const (
+	claudeBackoffDefault = 5 * time.Minute
+	claudeBackoffMax     = time.Hour
+)
+
+// rateLimitedError is a 429 from the usage endpoint, with the wait the
+// server asked for (zero when it named none).
+type rateLimitedError struct{ retryAfter time.Duration }
+
+func (e *rateLimitedError) Error() string {
+	return fmt.Sprintf("Claude usage request failed with HTTP %d", http.StatusTooManyRequests)
+}
+
+func (e *rateLimitedError) backoff() time.Duration {
+	switch {
+	case e.retryAfter <= 0:
+		return claudeBackoffDefault
+	case e.retryAfter > claudeBackoffMax:
+		return claudeBackoffMax
+	}
+	return e.retryAfter
+}
+
+// parseRetryAfter reads a Retry-After header in either form HTTP allows:
+// delay seconds or an HTTP date. Anything else is zero.
+func parseRetryAfter(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	if seconds, err := strconv.Atoi(value); err == nil {
+		return time.Duration(seconds) * time.Second
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		return at.Sub(now)
+	}
+	return 0
+}
+
+// claudeBackoff is the on-disk "do not ask before" stamp. It lives on disk,
+// not in memory, because the TUI, --json hooks and watchers are separate
+// processes that all poll the same endpoint.
+type claudeBackoff struct {
+	Until float64 `json:"until"`
+}
+
+// readBackoff returns the instant before which no request should be made;
+// the zero time when there is none or the file is unreadable.
+func (s claudeSource) readBackoff() time.Time {
+	path := s.resolvedBackoffPath()
+	if path == "" {
+		return time.Time{}
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return time.Time{}
+	}
+	var backoff claudeBackoff
+	if json.Unmarshal(raw, &backoff) != nil || backoff.Until <= 0 {
+		return time.Time{}
+	}
+	return time.Unix(int64(backoff.Until), 0)
+}
+
+func (s claudeSource) writeBackoff(until time.Time) {
+	raw, err := json.Marshal(claudeBackoff{Until: float64(until.Unix())})
+	if err != nil {
+		return
+	}
+	s.writeStateFile(s.resolvedBackoffPath(), raw)
+}
+
+func (s claudeSource) clearBackoff() {
+	if path := s.resolvedBackoffPath(); path != "" {
+		os.Remove(path)
+	}
 }
 
 // defaultClaudeSource wires the real paths: the token lives in
@@ -256,7 +355,12 @@ func (s claudeSource) writeCache(payload claudePayload, fetchedAt time.Time) {
 	if err != nil {
 		return
 	}
-	target := s.resolvedCachePath()
+	s.writeStateFile(s.resolvedCachePath(), raw)
+}
+
+// writeStateFile atomically replaces target with raw, mode 0600. "" is a
+// no-op, and every failure is silent: state files are an optimisation.
+func (s claudeSource) writeStateFile(target string, raw []byte) {
 	if target == "" {
 		return
 	}
@@ -295,26 +399,31 @@ func (s claudeSource) fetch(fresh bool) Snapshot {
 	snap := Snapshot{Source: "claude", Account: s.account, CredentialsPath: credentialsPath, Title: panelTitle("CLAUDE", s.account), Verb: "fetched", At: time.Now(),
 		Footnote: "account · 10m cache"}
 	now := time.Now()
+	cached, fetchedAt, haveCache := s.readCache()
 	if !fresh {
-		if cached, fetchedAt, ok := s.readCache(); ok && now.Sub(fetchedAt) < claudeCacheTTL {
-			cand := snap
-			// The stamp, not the current time: a cached reading must never
-			// look fresher than it is.
-			cand.Observed = fetchedAt
-			cand = s.withPayload(cand, cached)
-			if cand.Err == nil {
+		if haveCache && now.Sub(fetchedAt) < claudeCacheTTL {
+			if cand := s.fromCache(snap, cached, fetchedAt); cand.Err == nil {
 				return cand
 			}
 			// A young cache with no usable limits costs one extra request,
 			// not a red panel for the rest of the TTL: fall through and
 			// refetch.
 		}
+		// Asking again while rate limited only extends the limit.
+		if until := s.readBackoff(); now.Before(until) {
+			err := fmt.Errorf("rate limited (HTTP 429), next try in %s", compactDuration(until.Sub(now)))
+			return s.fallBack(snap, cached, fetchedAt, haveCache, err)
+		}
 	}
 	payload, err := s.requestUsage()
 	if err != nil {
-		snap.Err = err
-		return snap
+		var limited *rateLimitedError
+		if errors.As(err, &limited) {
+			s.writeBackoff(now.Add(limited.backoff()))
+		}
+		return s.fallBack(snap, cached, fetchedAt, haveCache, err)
 	}
+	s.clearBackoff()
 	// Whole seconds: the same value the cache stamp carries, so Observed and
 	// the stamp agree exactly.
 	snap.Observed = time.Unix(now.Unix(), 0)
@@ -324,6 +433,27 @@ func (s claudeSource) fetch(fresh bool) Snapshot {
 	if snap.Err == nil {
 		s.writeCache(payload, now)
 	}
+	return snap
+}
+
+func (s claudeSource) fromCache(snap Snapshot, cached claudePayload, fetchedAt time.Time) Snapshot {
+	// The stamp, not the current time: a cached reading must never look
+	// fresher than it is.
+	snap.Observed = fetchedAt
+	return s.withPayload(snap, cached)
+}
+
+// fallBack serves the last cached reading, however old, with err as a
+// warning; with no usable cache, err is the snapshot's error. Observed stays
+// the cache stamp, so the footer and observed_age_seconds show the age.
+func (s claudeSource) fallBack(snap Snapshot, cached claudePayload, fetchedAt time.Time, haveCache bool, err error) Snapshot {
+	if haveCache {
+		if cand := s.fromCache(snap, cached, fetchedAt); cand.Err == nil {
+			cand.Warning = err.Error() + "; showing last reading"
+			return cand
+		}
+	}
+	snap.Err = err
 	return snap
 }
 
@@ -375,6 +505,9 @@ func (s claudeSource) requestUsageWithToken(token string) (claudePayload, int, e
 		return claudePayload{}, 0, err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return claudePayload{}, resp.StatusCode, &rateLimitedError{retryAfter: parseRetryAfter(resp.Header.Get("Retry-After"), time.Now())}
+	}
 	if resp.StatusCode != http.StatusOK {
 		return claudePayload{}, resp.StatusCode, fmt.Errorf("Claude usage request failed with HTTP %d", resp.StatusCode)
 	}

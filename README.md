@@ -66,7 +66,11 @@ nothing:
   to the usage endpoint (`api.anthropic.com/api/oauth/usage`), cached for 10
   minutes in `~/.cache/quotatop/claude-quota.json`. The panel reports when the
   numbers were *observed* (from the cache stamp), not when it asked, so a
-  cached reading cannot look fresher than it is.
+  cached reading cannot look fresher than it is. When a request fails, the
+  panel keeps showing the last cached reading, at its real age, with a warning.
+  After an HTTP 429 every quotatop process holds off (for the server's
+  `Retry-After`, else 5 minutes, recorded in `claude-backoff.json` beside the
+  cache) instead of asking again every poll.
 
   When its OAuth token expires, the reader refreshes it with the stored
   refresh token and writes it back, so an idle account stays readable. On

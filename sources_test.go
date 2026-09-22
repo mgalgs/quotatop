@@ -19,6 +19,7 @@ import (
 type claudeStub struct {
 	status int
 	body   string
+	header http.Header
 	calls  int
 	req    *http.Request
 }
@@ -26,10 +27,14 @@ type claudeStub struct {
 func (s *claudeStub) do(req *http.Request) (*http.Response, error) {
 	s.calls++
 	s.req = req
+	header := s.header
+	if header == nil {
+		header = http.Header{}
+	}
 	return &http.Response{
 		StatusCode: s.status,
 		Body:       io.NopCloser(strings.NewReader(s.body)),
-		Header:     http.Header{},
+		Header:     header,
 	}, nil
 }
 
@@ -145,6 +150,107 @@ func TestClaudeNon200LeaksNothing(t *testing.T) {
 	for _, secret := range []string{"sk-test-token", "leaked-body-and"} {
 		if strings.Contains(msg, secret) {
 			t.Errorf("error = %q leaks %q", msg, secret)
+		}
+	}
+}
+
+// A 429 with an old cache serves that reading, flagged, at its real age.
+func TestClaudeRateLimitFallsBackToStaleCache(t *testing.T) {
+	stub := &claudeStub{status: 429}
+	src := claudeTestSource(t, stub)
+	stamp := time.Now().Add(-time.Hour)
+	writeClaudeCache(t, src.resolvedCachePath(), realisticClaudePayload, stamp)
+	snap := src.fetch(false)
+	if snap.Err != nil {
+		t.Fatalf("a 429 with a cache became an error: %v", snap.Err)
+	}
+	if !strings.Contains(snap.Warning, "429") {
+		t.Errorf("Warning = %q, want it to name the 429", snap.Warning)
+	}
+	if len(snap.Windows) == 0 {
+		t.Error("the cached windows were not served")
+	}
+	if !snap.Observed.Equal(time.Unix(stamp.Unix(), 0)) {
+		t.Errorf("Observed = %v, want the cache stamp %v", snap.Observed, stamp)
+	}
+}
+
+// Once rate limited, later reads -- from any process -- do not ask again
+// until the backoff passes.
+func TestClaudeRateLimitBacksOff(t *testing.T) {
+	stub := &claudeStub{status: 429}
+	src := claudeTestSource(t, stub)
+	if snap := src.fetch(false); snap.Err == nil {
+		t.Fatal("a 429 with no cache must be an error")
+	}
+	second := src.fetch(false)
+	if stub.calls != 1 {
+		t.Errorf("a read during backoff made %d requests in total, want 1", stub.calls)
+	}
+	if second.Err == nil || !strings.Contains(second.Err.Error(), "next try in") {
+		t.Errorf("Err = %v, want it to say when the next try is", second.Err)
+	}
+}
+
+func TestClaudeRateLimitHonoursRetryAfter(t *testing.T) {
+	stub := &claudeStub{status: 429, header: http.Header{"Retry-After": {"120"}}}
+	src := claudeTestSource(t, stub)
+	before := time.Now()
+	src.fetch(false)
+	until := src.readBackoff()
+	if wait := until.Sub(before); wait < 110*time.Second || wait > 130*time.Second {
+		t.Errorf("backoff = %v, want about the 120s Retry-After", wait)
+	}
+}
+
+// A forced read ignores the backoff, and a success clears it.
+func TestClaudeFreshReadClearsBackoff(t *testing.T) {
+	stub := &claudeStub{status: 200, body: realisticClaudePayload}
+	src := claudeTestSource(t, stub)
+	src.writeBackoff(time.Now().Add(time.Hour))
+	if snap := src.fetch(true); snap.Err != nil || snap.Warning != "" {
+		t.Fatalf("fresh read: err=%v warning=%q", snap.Err, snap.Warning)
+	}
+	if stub.calls != 1 {
+		t.Errorf("a fresh read during backoff made %d requests, want 1", stub.calls)
+	}
+	if !src.readBackoff().IsZero() {
+		t.Error("a successful read left the backoff in place")
+	}
+}
+
+// Any other failure also serves the last reading rather than a red panel.
+func TestClaudeServerErrorFallsBackToStaleCache(t *testing.T) {
+	stub := &claudeStub{status: 503}
+	src := claudeTestSource(t, stub)
+	writeClaudeCache(t, src.resolvedCachePath(), realisticClaudePayload, time.Now().Add(-time.Hour))
+	snap := src.fetch(false)
+	if snap.Err != nil || !strings.Contains(snap.Warning, "503") {
+		t.Errorf("err=%v warning=%q, want the cached reading with a 503 warning", snap.Err, snap.Warning)
+	}
+	if !src.readBackoff().IsZero() {
+		t.Error("a 503 must not start a rate-limit backoff")
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	now := time.Date(2026, 9, 22, 12, 0, 0, 0, time.UTC)
+	for value, want := range map[string]time.Duration{
+		"":                              0,
+		"90":                            90 * time.Second,
+		"soon":                          0,
+		"Tue, 22 Sep 2026 12:03:00 GMT": 3 * time.Minute,
+	} {
+		if got := parseRetryAfter(value, now); got != want {
+			t.Errorf("parseRetryAfter(%q) = %v, want %v", value, got, want)
+		}
+	}
+}
+
+func TestClaudeBackoffFileDistinctFromCache(t *testing.T) {
+	for _, account := range []string{"", "a", "a.backoff"} {
+		if claudeBackoffFileName(account) == claudeCacheFileName(account) {
+			t.Errorf("account %q: backoff and cache share a filename", account)
 		}
 	}
 }
