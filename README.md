@@ -60,9 +60,10 @@ layout; below that you still get the projection, just less of its context.
 ## What it reads
 
 Directly, in this process — the binary is self-contained and shells out to
-nothing:
+nothing, except `/usr/bin/security` for the macOS Keychain:
 
-- **Claude** — the OAuth token from `~/.claude/.credentials.json`, then a GET
+- **Claude** — the OAuth token from `~/.claude/.credentials.json` (on macOS,
+  from the Keychain unless that file holds a Claude token), then a GET
   to the usage endpoint (`api.anthropic.com/api/oauth/usage`), cached for 10
   minutes in `~/.cache/quotatop/claude-quota.json`. The panel reports when the
   numbers were *observed* (from the cache stamp), not when it asked, so a
@@ -115,7 +116,7 @@ QUOTATOP_CODEX_ROOTS = ~/work/agent-runs/*/codex-sessions:~/.codex-archive
 | Setting | Does |
 |---------|------|
 | `QUOTATOP_CODEX_ROOTS` | extra Codex session roots (see below) |
-| `QUOTATOP_CLAUDE_CREDENTIALS` | override the path to `.credentials.json` |
+| `QUOTATOP_CLAUDE_CREDENTIALS` | override the path to `.credentials.json`, or `keychain:<service>` for a macOS Keychain item |
 | `QUOTATOP_CLAUDE_ACCOUNT_<label>` | add a Claude panel that reads `<label>`'s own credentials file (see below) |
 | `QUOTATOP_CODEX_ACCOUNT_<label>` | add a Codex panel that scans `<label>`'s own session roots (see below) |
 | `QUOTATOP_HISTORY` | override the trend file's location |
@@ -142,7 +143,8 @@ Declaring one or more `QUOTATOP_CLAUDE_ACCOUNT_<label>` variables (config file
 or environment, `<label>` is any name you pick) replaces the single unnamed
 Claude panel with one panel per label, sorted by label in ascending byte
 order; `QUOTATOP_CLAUDE_CREDENTIALS` is not consulted once any are declared.
-Each value is the path to that account's own `.credentials.json`.
+Each value is the path to that account's own `.credentials.json`, or
+`keychain:<service>` for an account whose token is in the macOS Keychain.
 
 ```ini
 QUOTATOP_CLAUDE_ACCOUNT_work = ~/work/.claude/.credentials.json
@@ -334,18 +336,25 @@ nothing is routable. Like `--json`, this records a trend sample unless
 
 ## Platform support
 
-**Linux is what this is tested on.** The Claude reader expects the OAuth token
-in `~/.claude/.credentials.json`.
+**Linux** — the Claude reader reads the OAuth token from
+`~/.claude/.credentials.json`.
 
-**macOS is not supported yet.** Claude Code stores that credential in the
-Keychain there, not in a file, so the Claude panel will report an error. Two
-ways forward, and PRs are welcome for either:
+**macOS** — Claude Code keeps the token in the login Keychain, in the
+generic-password item `Claude Code-credentials`. Unless
+`~/.claude/.credentials.json` holds a Claude token, quotatop reads that item
+with `/usr/bin/security`. Claude Code uses the same program, so the item's access
+list already trusts it and no Keychain prompt appears. After a token refresh,
+quotatop writes the item back through `security`'s stdin, so the token never
+appears on a command line.
 
-- Export the token to a JSON file of the same shape and point
-  `QUOTATOP_CLAUDE_CREDENTIALS` at it. That path exists precisely for this.
-- Add a proper Keychain reader. This has deliberately *not* been shipped
-  untested — there is no Mac here to verify it on, and a credential path that
-  silently reads the wrong thing is worse than one that is plainly absent.
+A second Claude account on macOS has its own Keychain item. Find its service
+name in Keychain Access (it starts with `Claude Code-credentials`), then name
+it in the account's value:
+
+```ini
+QUOTATOP_CLAUDE_ACCOUNT_work = keychain:Claude Code-credentials-1a2b3c4d
+QUOTATOP_CLAUDE_ACCOUNT_personal = keychain:Claude Code-credentials
+```
 
 The Codex reader is filesystem-only and works anywhere Go does.
 

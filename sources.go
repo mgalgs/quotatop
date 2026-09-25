@@ -42,7 +42,7 @@ func windowExpired(length time.Duration, observed, now time.Time) bool {
 type Snapshot struct {
 	Source          string // "claude" or "codex"
 	Account         string // "" unless multi-account configuration names this source
-	CredentialsPath string // absolute path to the credentials file, "" when the source has none
+	CredentialsPath string // absolute path to the credentials file, "keychain:<service>" for a Keychain item, "" when the source has none
 	Title           string
 	Chip            string // plan or similar, shown in the panel's top-right
 	Windows         []Window
@@ -144,8 +144,13 @@ type claudeSource struct {
 	// doRequest performs the usage request; nil uses http.DefaultClient.Do.
 	doRequest func(*http.Request) (*http.Response, error)
 	// usageURL and oauthURL are overridable for hermetic tests.
-	usageURL        string
-	oauthURL        string
+	usageURL string
+	oauthURL string
+	// runSecurity replaces security(1) for Keychain reads and writes; nil
+	// runs the real /usr/bin/security.
+	runSecurity func(stdin []byte, args ...string) ([]byte, error)
+	// credentialsPath is a file path, or "keychain:<service>" for a macOS
+	// Keychain item.
 	credentialsPath string
 	cacheDir        string // base directory the cache file lives in; "" disables the cache entirely
 	account         string // "" unless multi-account configuration names this source
@@ -289,16 +294,24 @@ func (s claudeSource) clearBackoff() {
 }
 
 // defaultClaudeSource wires the real paths: the token lives in
-// ~/.claude/.credentials.json, the cache in ~/.cache/quotatop/.
+// ~/.claude/.credentials.json, the cache in ~/.cache/quotatop/. On macOS,
+// where Claude Code keeps the token in the Keychain, the Keychain item is
+// the default unless that file holds a Claude token. The file can exist on
+// macOS without one; it wins only when Claude Code wrote the token there
+// because the Keychain was unavailable.
 func defaultClaudeSource() claudeSource {
 	var source claudeSource
 	if home, err := os.UserHomeDir(); err == nil {
 		source.credentialsPath = filepath.Join(home, ".claude", ".credentials.json")
 		source.cacheDir = filepath.Join(home, ".cache", "quotatop")
 	}
-	// QUOTATOP_CLAUDE_CREDENTIALS overrides the credentials path, e.g. for a
-	// macOS user whose token lives in the Keychain and who has exported it
-	// to a JSON file of the same shape.
+	if keychainFallback {
+		if _, err := source.readClaudeCredentials(); source.credentialsPath == "" || err != nil {
+			source.credentialsPath = keychainPrefix + claudeKeychainService
+		}
+	}
+	// QUOTATOP_CLAUDE_CREDENTIALS overrides the credentials location: a
+	// file path, or keychain:<service>.
 	if override := setting("QUOTATOP_CLAUDE_CREDENTIALS"); override != "" {
 		source.credentialsPath = expandTilde(override)
 	}
@@ -393,7 +406,7 @@ func (s claudeSource) writeStateFile(target string, raw []byte) {
 
 func (s claudeSource) fetch(fresh bool) Snapshot {
 	credentialsPath := s.credentialsPath
-	if credentialsPath != "" {
+	if _, keychain := keychainService(credentialsPath); credentialsPath != "" && !keychain {
 		if abs, err := filepath.Abs(credentialsPath); err == nil {
 			credentialsPath = abs
 		}
