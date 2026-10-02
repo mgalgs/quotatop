@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -769,12 +770,23 @@ func (s codexSource) scan() (snap Snapshot) {
 	if s.blockScan != nil {
 		s.blockScan()
 	}
-	var report codexReport
+	var logs []codexLog
 	if s.defaultRoot != "" {
-		s.walkRoot(s.defaultRoot, "interactive", &report)
+		logs = walkRoot(s.defaultRoot, "interactive", logs)
 	}
 	for _, root := range s.extraRoots {
-		s.walkRoot(root, "extra", &report)
+		logs = walkRoot(root, "extra", logs)
+	}
+	// Newest first, so the best reading is found early and every log last
+	// written before it can be skipped unread: none of its rows can be newer.
+	// Stable, so equal mtimes keep walk order and its tie-breaking.
+	sort.SliceStable(logs, func(i, j int) bool { return logs[i].modTime.After(logs[j].modTime) })
+	var report codexReport
+	for _, log := range logs {
+		if report.path != "" && log.modTime.Before(report.timestamp) {
+			break
+		}
+		s.scanFile(log.path, log.kind, &report)
 	}
 	if report.path == "" {
 		if report.scanErr != nil {
@@ -872,17 +884,29 @@ func (s codexSource) fetch() Snapshot {
 	}
 }
 
-// walkRoot scans every .jsonl file under root. A file or directory that
-// vanishes or is unreadable is skipped, not an error: sandbox run directories
-// are deleted while this scans.
-func (s codexSource) walkRoot(root, kind string, report *codexReport) {
+// codexLog is one session log found by the walk, not yet read.
+type codexLog struct {
+	path    string
+	kind    string
+	modTime time.Time
+}
+
+// walkRoot appends every .jsonl file under root to logs. A file or directory
+// that vanishes or is unreadable is skipped, not an error: sandbox run
+// directories are deleted while this scans.
+func walkRoot(root, kind string, logs []codexLog) []codexLog {
 	filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil || entry.IsDir() || !strings.HasSuffix(path, ".jsonl") {
 			return nil
 		}
-		s.scanFile(path, kind, report)
+		info, err := entry.Info()
+		if err != nil {
+			return nil
+		}
+		logs = append(logs, codexLog{path: path, kind: kind, modTime: info.ModTime()})
 		return nil
 	})
+	return logs
 }
 
 // codexMaxLineBytes bounds the memory a single line can hold. A real usage

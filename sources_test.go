@@ -497,6 +497,28 @@ func TestCodexNewestRowWinsAcrossRoots(t *testing.T) {
 	}
 }
 
+func TestCodexLogOlderThanBestReadingIsNotRead(t *testing.T) {
+	dir := t.TempDir()
+	writeSessionFile(t, dir, "new.jsonl",
+		codexLine("2026-03-01T11:00:00Z", `"codex"`, ``, `{"used_percent":20}`, ``)+"\n")
+	// The row claims to be newer than its own file, which a real log never
+	// does; it can only win if the file is read despite its old mtime.
+	writeSessionFile(t, dir, "old.jsonl",
+		codexLine("2026-03-01T12:00:00Z", `"codex"`, ``, `{"used_percent":99}`, ``)+"\n")
+	stamp := func(name string, at time.Time) {
+		if err := os.Chtimes(filepath.Join(dir, name), at, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stamp("new.jsonl", time.Date(2026, 3, 1, 11, 0, 1, 0, time.UTC))
+	stamp("old.jsonl", time.Date(2026, 3, 1, 10, 0, 0, 0, time.UTC))
+
+	snap := codexSource{defaultRoot: dir}.fetch()
+	if len(snap.Windows) != 1 || snap.Windows[0].Percent != 20 {
+		t.Errorf("windows = %+v, want the newest log's 20%%", snap.Windows)
+	}
+}
+
 func TestCodexSkipsMalformedLines(t *testing.T) {
 	dir := t.TempDir()
 	lines := []string{
