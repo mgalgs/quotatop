@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -890,6 +891,8 @@ func (s codexSource) walkRoot(root, kind string, report *codexReport) {
 // is drained and skipped so the rest of the file is still read.
 const codexMaxLineBytes = 1024 * 1024
 
+var codexRateLimitsKey = []byte(`"rate_limits"`)
+
 // readLine returns the next line from r without its trailing newline. A line
 // longer than max is discarded and reported with skipped=true and no data:
 // the rest of that line is drained so reading continues with the line after
@@ -940,7 +943,9 @@ func (s codexSource) scanFile(path, kind string, report *codexReport) {
 		// A skipped oversized line is not an error: it is discarded and the
 		// rest of the file is still read, so the reading is the newest
 		// available and needs no staleness caution.
-		if !skipped && len(line) > 0 {
+		// consider() ignores any row without a rate_limits object, and nearly
+		// every line is message content, so a byte search skips the parse.
+		if !skipped && bytes.Contains(line, codexRateLimitsKey) {
 			var row codexRow
 			if json.Unmarshal(line, &row) == nil {
 				report.consider(row, path, kind)
