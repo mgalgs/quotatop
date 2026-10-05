@@ -34,9 +34,24 @@ func sameClaudeCredentials(a, b claudeCredentials) bool {
 		a.expiresAt == b.expiresAt
 }
 
+// readCredentialsDocument returns the raw credentials JSON from the file or
+// the Keychain item the location names.
+func (s claudeSource) readCredentialsDocument() ([]byte, error) {
+	if service, ok := keychainService(s.credentialsPath); ok {
+		return s.readKeychain(service)
+	}
+	return os.ReadFile(s.credentialsPath)
+}
+
 func (s claudeSource) readClaudeCredentials() (claudeCredentials, error) {
-	raw, err := os.ReadFile(s.credentialsPath)
+	raw, err := s.readCredentialsDocument()
 	if err != nil {
+		if _, ok := keychainService(s.credentialsPath); ok {
+			if errors.Is(err, os.ErrNotExist) {
+				return claudeCredentials{}, errors.New("not signed in to Claude Code (no Keychain item)")
+			}
+			return claudeCredentials{}, err
+		}
 		return claudeCredentials{}, errors.New("not signed in to Claude Code (no credentials file)")
 	}
 	var doc struct {
@@ -168,7 +183,7 @@ func (s claudeSource) redeemClaudeRefreshToken(refreshToken string) (claudeCrede
 // writeRefreshedClaudeCredentials changes only the three OAuth fields. Raw
 // JSON values are emitted directly so unknown fields retain their bytes.
 func (s claudeSource) writeRefreshedClaudeCredentials(credentials claudeCredentials) error {
-	raw, err := os.ReadFile(s.credentialsPath)
+	raw, err := s.readCredentialsDocument()
 	if err != nil {
 		return fmt.Errorf("refreshed Claude token but could not write %s: %w", s.credentialsPath, err)
 	}
@@ -200,6 +215,12 @@ func (s claudeSource) writeRefreshedClaudeCredentials(credentials claudeCredenti
 	output, err := marshalRawObject(doc)
 	if err != nil {
 		return fmt.Errorf("refreshed Claude token but could not write %s: %w", s.credentialsPath, err)
+	}
+	if service, ok := keychainService(s.credentialsPath); ok {
+		if err := s.writeKeychain(service, output); err != nil {
+			return fmt.Errorf("refreshed Claude token but %w", err)
+		}
+		return nil
 	}
 	dir := filepath.Dir(s.credentialsPath)
 	tmp, err := os.CreateTemp(dir, ".credentials-*.tmp")
