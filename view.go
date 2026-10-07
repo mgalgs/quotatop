@@ -236,6 +236,28 @@ func compactDuration(d time.Duration) string {
 	}
 }
 
+// singleUnitDuration renders a span in its largest unit alone: "3.5d",
+// "1.2h", "45m", "30s". Tenths are truncated, not rounded, so a countdown
+// never reads later than the real deadline.
+func singleUnitDuration(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	tenths := func(units float64, suffix string) string {
+		return strings.TrimSuffix(fmt.Sprintf("%.1f", math.Floor(units*10)/10), ".0") + suffix
+	}
+	switch {
+	case d >= 24*time.Hour:
+		return tenths(d.Hours()/24, "d")
+	case d >= time.Hour:
+		return tenths(d.Hours(), "h")
+	case d >= time.Minute:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	}
+}
+
 // resetText describes the deadline. brief drops the absolute clock time, which
 // is what gives way first when a panel is too narrow to hold everything.
 func resetText(resetsAt time.Time, now time.Time, brief bool) string {
@@ -643,7 +665,71 @@ func panelCompact(width int, snap *Snapshot, history *History, now time.Time, lo
 
 	footer := panelFooter(snap, loading, now)
 	chip, footnote := panelChipFootnote(snap)
+	if snap.Err == nil {
+		chip = compactResetChip(width, title, chip, snap.Windows, now)
+	}
 	return box(width, title, chip, body, footer, footnote)
+}
+
+// shortWindowName is the few-cell name a window goes by in the compact
+// reset chip: "5h", "wk", or the label's first word when the length is
+// unknown.
+func shortWindowName(window Window) string {
+	switch {
+	case window.Length >= 7*24*time.Hour && window.Length%(7*24*time.Hour) == 0:
+		return "wk"
+	case window.Length >= 24*time.Hour && window.Length%(24*time.Hour) == 0:
+		return fmt.Sprintf("%dd", int(window.Length.Hours())/24)
+	case window.Length >= time.Hour:
+		return fmt.Sprintf("%dh", int(window.Length.Hours()))
+	case window.Length > 0:
+		return fmt.Sprintf("%dm", int(window.Length.Minutes()))
+	}
+	if fields := strings.Fields(window.Label); len(fields) > 0 {
+		return strings.ToLower(fields[0])
+	}
+	return "?"
+}
+
+// compactResetChip appends each window's reset countdown to the panel's
+// top-right chip, the compact layout's only home for it. Windows that read
+// the same (a scoped weekly beside the plain weekly) are listed once. When
+// the top border is too narrow, later resets are dropped before the soonest,
+// and the soonest before the plain chip: borderLine would otherwise drop the
+// whole right side, chip included.
+func compactResetChip(width int, title, chip string, windows []Window, now time.Time) string {
+	var parts []string
+	seen := map[string]bool{}
+	for _, window := range windows {
+		if window.Expired || window.ResetsAt.IsZero() {
+			continue
+		}
+		name := shortWindowName(window)
+		when := "due"
+		if left := window.ResetsAt.Sub(now); left > 0 {
+			when = singleUnitDuration(left)
+		}
+		// Keyed on the text: a scoped weekly's deadline can sit a fraction
+		// of a second off the plain weekly's.
+		if key := name + when; !seen[key] {
+			seen[key] = true
+			parts = append(parts, currentTheme().dim.Render(name+"[")+
+				currentTheme().txt.Render(when)+currentTheme().dim.Render("]"))
+		}
+	}
+	// "─ title " + at least one cell of rule + " chip ─", inside the corners.
+	room := width - 2 - lipgloss.Width(title) - 3 - 1 - 3
+	separator := currentTheme().dim.Render(" · ")
+	for n := len(parts); n > 0; n-- {
+		candidate := strings.Join(parts[:n], separator)
+		if chip != "" {
+			candidate = chip + separator + candidate
+		}
+		if lipgloss.Width(candidate) <= room {
+			return candidate
+		}
+	}
+	return chip
 }
 
 // panelFooter is the bottom-edge content every layout shares: when the

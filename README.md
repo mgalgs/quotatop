@@ -41,8 +41,9 @@ Give it its own tmux window and leave it there.
 | `--fresh` | bypass the Claude cache on the first read (not a 429 backoff) |
 | `--no-history` | do not read or write the trend file |
 
-The compact layouts squeeze each window onto one line, and the burn forecast
-moves inside the bar itself:
+The compact layouts squeeze each window onto one line, the burn forecast
+moves inside the bar itself, and each window's reset countdown moves to the
+panel's top border (`5h[1.1h] · wk[3.5d]`), as much of it as fits:
 
 <p align="center">
 <a href="docs/screenshot.png"><img src="docs/screenshot.png" width="600" alt="the compact-vertical layout: one line per window, each burn forecast printed inside its gauge bar"></a>

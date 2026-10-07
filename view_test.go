@@ -1894,3 +1894,24 @@ func TestCompactComfortableWidthKeepsFullLabel(t *testing.T) {
 		}
 	}
 }
+
+func TestSingleUnitDuration(t *testing.T) {
+	cases := []struct {
+		in   time.Duration
+		want string
+	}{
+		{84 * time.Hour, "3.5d"},
+		{4 * 24 * time.Hour, "4d"},
+		{4*24*time.Hour - time.Minute, "3.9d"}, // truncated, never rounded up
+		{76 * time.Minute, "1.2h"},
+		{time.Hour, "1h"},
+		{45*time.Minute + 50*time.Second, "45m"},
+		{30 * time.Second, "30s"},
+		{-time.Second, "0s"},
+	}
+	for _, c := range cases {
+		if got := singleUnitDuration(c.in); got != c.want {
+			t.Errorf("singleUnitDuration(%v) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
