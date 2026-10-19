@@ -274,7 +274,8 @@ type Projection struct {
 	ExhaustAt   time.Time // when it would hit 100%, if that is before the reset
 	FullAt      time.Time // when it would hit 100% at this rate, reset or no reset
 	Valid       bool
-	Sustained   bool // the rate came from the window's own elapsed pace, not the recent slope
+	Sustained   bool // the rate is a long-run average, not the recent slope
+	Rolling     bool // ...measured over a lookback as long as the window, across resets
 }
 
 const (
@@ -284,6 +285,56 @@ const (
 	sustainedMinLength  = 24 * time.Hour // "long window" for the sustained model
 	sustainedMinElapsed = 12 * time.Hour // under this the denominator is too small
 )
+
+// rollingRate is the burn rate over a lookback as long as the window itself:
+// a weekly window is projected from the last seven days of use, whichever
+// windows they fell in. It adds up every rise between consecutive samples; a
+// drop larger than resetDrop is a rollover, so the reading after it counts in
+// full as climbed from zero, and a smaller drop is a revision and counts as
+// nothing. The lookback must be fully covered by history -- the newest sample
+// at or before its start dates the value there, since only changes are stored
+// -- otherwise it declines and the caller falls back to sustainedRate.
+//
+// Usage lost between a window's last sample and its rollover (quotatop was not
+// running) is not recovered, so a gap that spans a reset reads low.
+func (h *History) rollingRate(identity string, window Window, now time.Time) (float64, bool) {
+	if window.Length < sustainedMinLength {
+		return 0, false // short windows keep the live model
+	}
+	samples := h.data[historyKey(identity, window.Key)]
+	lookbackStart := now.Add(-window.Length)
+	first := -1
+	for i, s := range samples {
+		if !s.T.After(lookbackStart) {
+			first = i
+		}
+	}
+	if first < 0 {
+		return 0, false // history does not reach back a whole window
+	}
+	used, prev := 0.0, samples[first].Pct
+	step := func(pct float64) {
+		switch delta := pct - prev; {
+		case delta >= 0:
+			used += delta
+		case delta < -resetDrop:
+			used += pct
+		}
+		prev = pct
+	}
+	for _, s := range samples[first+1:] {
+		if s.T.After(now) {
+			break
+		}
+		step(s.Pct)
+	}
+	step(window.Percent)
+	rate := used / window.Length.Hours()
+	if math.IsNaN(rate) || math.IsInf(rate, 0) {
+		return 0, false
+	}
+	return rate, true
+}
 
 // sustainedRate is the burn rate measured over the window's own elapsed
 // activity: the percentage accrued since an anchor, divided by the hours
@@ -388,14 +439,20 @@ func finishProjection(current, rate float64, resetsAt, now time.Time) Projection
 }
 
 // Project answers "if this keeps up, what happens before the reset?". Long
-// windows are projected with the sustained model (their own elapsed pace); short
-// windows and any window the sustained model cannot date fall through to the
+// windows are projected with the rolling model (the last window-length of use)
+// when history covers it, else the sustained model (this window's own elapsed
+// pace); short windows and any window neither can date fall through to the
 // live slope below.
 //
 // The live model fits a rate over the samples since the window last reset. A
 // window reset is a sharp drop, and averaging across one would report a
 // meaningless negative burn, so everything before the last drop is discarded.
 func (h *History) Project(identity string, window Window, now time.Time) Projection {
+	if rate, ok := h.rollingRate(identity, window, now); ok {
+		projection := finishProjection(window.Percent, rate, window.ResetsAt, now)
+		projection.Sustained, projection.Rolling = true, true
+		return projection
+	}
 	if rate, ok := h.sustainedRate(identity, window, now); ok {
 		projection := finishProjection(window.Percent, rate, window.ResetsAt, now)
 		projection.Sustained = true

@@ -1099,6 +1099,66 @@ func TestProjectSustainedNeverReportsANegativeRate(t *testing.T) {
 	}
 }
 
+// The headline case for the rolling model: an hour after a weekly reset, the
+// rate is last week's pace, not an hour of slope. Rises sum to 40+40+1 over
+// the 168h lookback; the rollover drop to zero adds nothing.
+func TestProjectRollingSpansTheLastReset(t *testing.T) {
+	now := time.Now()
+	window := Window{Key: "weekly_all", Percent: 1, Length: 168 * time.Hour,
+		ResetsAt: now.Add(167 * time.Hour)}
+	history := loadHistory("")
+	history.Add("claude/weekly_all", now.Add(-170*time.Hour), 10) // dates the lookback's start
+	history.Add("claude/weekly_all", now.Add(-100*time.Hour), 50)
+	history.Add("claude/weekly_all", now.Add(-2*time.Hour), 90)
+	history.Add("claude/weekly_all", now.Add(-time.Hour), 0) // the rollover
+	projection := history.Project("claude", window, now)
+	if !projection.Valid || !projection.Rolling || !projection.Sustained {
+		t.Fatalf("expected a rolling projection: %+v", projection)
+	}
+	if want := 81.0 / 168; math.Abs(projection.RatePerHour-want) > 0.01 {
+		t.Errorf("rate = %v%%/h, want ~%v (81%% over the last 168h)", projection.RatePerHour, want)
+	}
+	if projection.AtReset < 80 || projection.AtReset > 83 {
+		t.Errorf("at reset = %v%%, want ~81.5", projection.AtReset)
+	}
+	if got := encodeJSONProjection(projection, window.ResetsAt).Model; got != "rolling" {
+		t.Errorf("json model = %q, want rolling", got)
+	}
+}
+
+// A drop within resetDrop is a source revising its number, not a rollover:
+// it must not count as fresh usage climbed from zero.
+func TestProjectRollingIgnoresSmallRevisions(t *testing.T) {
+	now := time.Now()
+	window := Window{Key: "weekly_all", Percent: 35, Length: 168 * time.Hour,
+		ResetsAt: now.Add(68 * time.Hour)}
+	history := loadHistory("")
+	history.Add("claude/weekly_all", now.Add(-170*time.Hour), 10)
+	history.Add("claude/weekly_all", now.Add(-50*time.Hour), 30)
+	history.Add("claude/weekly_all", now.Add(-40*time.Hour), 29)
+	projection := history.Project("claude", window, now)
+	if !projection.Rolling {
+		t.Fatalf("expected a rolling projection: %+v", projection)
+	}
+	if want := 26.0 / 168; math.Abs(projection.RatePerHour-want) > 0.01 {
+		t.Errorf("rate = %v%%/h, want ~%v (20 + 0 + 6 over 168h)", projection.RatePerHour, want)
+	}
+}
+
+// History that does not reach back a whole window cannot date the lookback's
+// start, so the sustained model takes over.
+func TestProjectRollingNeedsAFullWindowOfHistory(t *testing.T) {
+	now := time.Now()
+	window := Window{Key: "weekly_all", Percent: 20, Length: 168 * time.Hour,
+		ResetsAt: now.Add(68 * time.Hour)}
+	history := loadHistory("")
+	history.Add("claude/weekly_all", now.Add(-160*time.Hour), 5)
+	projection := history.Project("claude", window, now)
+	if !projection.Valid || projection.Rolling || !projection.Sustained {
+		t.Fatalf("expected the sustained fallback: %+v", projection)
+	}
+}
+
 func TestProjectionTextLabelsSustainedRate(t *testing.T) {
 	now := time.Now()
 	sustained := Projection{RatePerHour: 1.0, AtReset: 168, ExhaustAt: now.Add(59 * time.Hour),

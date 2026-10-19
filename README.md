@@ -173,12 +173,19 @@ Every percentage change is appended to `~/.cache/quotatop/history.jsonl`
 what makes the sparkline and the burn rate work on the first frame after a
 restart instead of an hour later.
 
-The rate comes from one of two models. Long windows (24h or more) are projected
-from their own elapsed pace — the percentage accrued since an anchor, divided
+The rate comes from one of three models. Long windows (24h or more) are
+projected from a rolling lookback as long as the window: a weekly window uses
+the last seven days of use, summed across any reset in between, so the
+forecast right after a rollover reflects your usual pace rather than an hour
+of slope. A reset is told apart from a source revising its number by size —
+a drop of more than 3 points — and usage between the last sample and a reset
+that quotatop missed is not recovered, so a gap spanning a reset reads low.
+This needs history reaching back a whole window; until it does, long windows
+are projected from their own elapsed pace — the percentage accrued since an anchor, divided
 by the hours since that anchor — because a weekly window's elapsed time
 already contains the nights and days away from the keyboard, and extrapolating
-a working-hours slope across mostly-sleep time overstates the burn; these are
-labelled `avg`. The anchor is the first sample after history last saw the
+a working-hours slope across mostly-sleep time overstates the burn. Both
+long-window models are labelled `avg`. The anchor is the first sample after history last saw the
 window at zero, so the days before it don't get charged against the
 post-anchor slope; it falls back to the window's own open (zero, by
 definition) when history does not reach back that far, and also when the

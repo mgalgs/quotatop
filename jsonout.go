@@ -193,6 +193,9 @@ func encodeJSONProjection(projection Projection, resetsAt time.Time) jsonProject
 	if projection.Sustained {
 		encoded.Model = "sustained"
 	}
+	if projection.Rolling {
+		encoded.Model = "rolling"
+	}
 	rate, atReset := projection.RatePerHour, projection.AtReset
 	exhausts := !projection.ExhaustAt.IsZero()
 	encoded.RatePerHour = &rate
