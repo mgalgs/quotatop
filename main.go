@@ -1,8 +1,9 @@
 // quotatop -- a live TUI for Claude and Codex quota, in one window.
 //
 // Both panels are read directly by this process: Claude from the OAuth usage
-// endpoint (token from ~/.claude/.credentials.json, 10-minute on-disk cache),
-// Codex from the newest rate-limit rows in the local session logs.
+// endpoint (token from ~/.claude/.credentials.json or the macOS Keychain,
+// 10-minute on-disk cache), Codex from the newest rate-limit rows in the local
+// session logs.
 package main
 
 import (
