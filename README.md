@@ -78,15 +78,32 @@ nothing, except `/usr/bin/security` for the macOS Keychain:
   When its OAuth token expires, the reader refreshes it with the stored
   refresh token and writes it back, so an idle account stays readable. On
   refresh failure, the panel advises re-login in a claude session.
-- **Codex** — the local session logs, walked recursively from `$CODEX_HOME`
-  (or `~/.codex`) plus `/sessions`, for the newest recorded rate limits. There
-  is no server to ask: Codex only knows its limits when it reports them, which
-  is why that panel can be minutes or hours stale and says so.
+- **Codex** — two readings, and the newer one wins. quotatop runs
+  `codex app-server` (the `codex` on your `PATH`, with your `$CODEX_HOME`)
+  and asks it for the account's current rate limits, every 3 minutes at most
+  across all quotatop processes; the last answer is kept in
+  `~/.cache/quotatop/codex-live.json` with the time it was fetched, so a
+  cached reading never looks fresher than it is. That reading counts usage
+  from every login of the account, and the panel's footnote says `live`.
+  Beside it, the local session logs are walked recursively from `$CODEX_HOME`
+  (or `~/.codex`) plus `/sessions` for the newest recorded rate limits, as
+  before; Codex only writes those when it runs on this machine, which is why a
+  log-only panel can be minutes or hours stale and says so.
+
+  Codex refresh tokens are single use, so a refresh by quotatop's app-server
+  racing one by your own codex could log one of them out. app-server only
+  refreshes when the access token is within 5 minutes of expiry, so quotatop
+  skips the live read whenever the token in `$CODEX_HOME/auth.json` is within
+  an hour of expiry, and never triggers a refresh. It also skips it with no
+  `auth.json` (keyring storage, logged out, an API-key login) or no `codex`
+  on the `PATH`. A skipped or failed live read just leaves the log reading;
+  `QUOTATOP_CODEX_LIVE=off` turns the live read off entirely.
 
 > **Both of these are undocumented and can change without notice.** Neither the
-> OAuth usage endpoint nor the shape of the Codex session log is a public
-> interface, and neither vendor owes this tool stability. If a panel starts
-> reporting an error after an update, that is the most likely reason.
+> OAuth usage endpoint nor the shape of the Codex session log or of
+> app-server's rate-limit reply is a public interface, and neither vendor
+> owes this tool stability. If a panel starts reporting an error after an
+> update, that is the most likely reason.
 
 A source that fails with nothing cached turns into a red panel with the error
 in it; the other panels keep running.
@@ -120,6 +137,8 @@ QUOTATOP_CODEX_ROOTS = ~/work/agent-runs/*/codex-sessions:~/.codex-archive
 | `QUOTATOP_CLAUDE_CREDENTIALS` | override the path to `.credentials.json`, or `keychain:<service>` for a macOS Keychain item |
 | `QUOTATOP_CLAUDE_ACCOUNT_<label>` | add a Claude panel that reads `<label>`'s own credentials file (see below) |
 | `QUOTATOP_CODEX_ACCOUNT_<label>` | add a Codex panel that scans `<label>`'s own session roots (see below) |
+| `QUOTATOP_CODEX_HOME_<label>` | the `CODEX_HOME` of Codex account `<label>`, so its panel live-reads too (see below) |
+| `QUOTATOP_CODEX_LIVE` | `off` stops running `codex app-server`; Codex panels then read the session logs only |
 | `QUOTATOP_HISTORY` | override the trend file's location |
 | `QUOTATOP_STATE` | override the persisted-preferences file's location (environment only — the config file does not supply it) |
 | `QUOTATOP_CONFIG` | override the config file's location |
@@ -158,6 +177,16 @@ Declaring any `QUOTATOP_CODEX_ACCOUNT_` replaces the single unnamed Codex
 panel entirely — the default `~/.codex`/`$CODEX_HOME` root and
 `QUOTATOP_CODEX_ROOTS` are both dropped, so a value here has to name
 everywhere that account's sessions live, or the panel finds nothing.
+
+A named Codex account reads its logs only, since nothing in a glob list says
+which login it belongs to. Add `QUOTATOP_CODEX_HOME_<label>` with that
+account's `CODEX_HOME` and its panel live-reads that home too, under the same
+3-minute limit and token check, with its own `codex-live-<label>.json`:
+
+```ini
+QUOTATOP_CODEX_ACCOUNT_work = ~/work/.codex/sessions
+QUOTATOP_CODEX_HOME_work = ~/work/.codex
+```
 
 A labelled panel's title gains `· <label>`, and its `--json` entry gains an
 `account` field carrying the label — see below.
@@ -252,7 +281,7 @@ a window that is gone; `projection.valid` is always `false` when `expired` is
 forecast. A consumer that cares about the *current* state should skip a
 window's `percent` when `expired` is set rather than treat it as live.
 
-This matters most for Codex, which has no server to poll: a reading is only as
+This matters most for Codex when it cannot live-read: a log reading is only as
 fresh as the newest session log that recorded one, so five idle hours are
 enough to make the 5-hour window's number describe a window that no longer
 exists. It is per-window, not per-source — one observation time is shared by
@@ -364,7 +393,8 @@ QUOTATOP_CLAUDE_ACCOUNT_work = keychain:Claude Code-credentials-1a2b3c4d
 QUOTATOP_CLAUDE_ACCOUNT_personal = keychain:Claude Code-credentials
 ```
 
-The Codex reader is filesystem-only and works anywhere Go does.
+The Codex reader works anywhere Go does; its live read needs `codex` on the
+`PATH` and a ChatGPT login stored in `auth.json`.
 
 ## Development
 
