@@ -233,3 +233,121 @@ func awaitCodexReply(reader *bufio.Reader, id string) (codexRPCReply, error) {
 		}
 	}
 }
+
+// codexLiveTTL is how often app-server is started at most, per account,
+// across every quotatop process: the TUI polls every 20s and --json runs on
+// every prompt, so the stamp lives on disk, not in memory.
+const codexLiveTTL = 3 * time.Minute
+
+// codexLiveState is the on-disk record of one account's live reads: when one
+// was last attempted, and the last reading that succeeded with its fetch
+// time. home ties it to the CODEX_HOME it was read from, so a reading is
+// never served for a different login. Times are unix seconds, as in the
+// Claude cache.
+type codexLiveState struct {
+	Home        string           `json:"home"`
+	AttemptedAt float64          `json:"attempted_at"`
+	FetchedAt   float64          `json:"fetched_at"`
+	RateLimits  *codexRateLimits `json:"rate_limits,omitempty"`
+}
+
+// codexLiveFileName names one account's state file; the escaping is the
+// Claude cache's, so an account label stays one filename component.
+func codexLiveFileName(account string) string {
+	return claudeStateFileName("codex-live", account)
+}
+
+func (s codexSource) resolvedLivePath() string {
+	if s.cacheDir == "" {
+		return ""
+	}
+	return filepath.Join(s.cacheDir, codexLiveFileName(s.account))
+}
+
+// readLiveState returns this home's record. Missing, corrupt or another
+// home's all read as an empty record: a bad state file costs one extra
+// read, never an error panel.
+func (s codexSource) readLiveState() codexLiveState {
+	empty := codexLiveState{Home: s.liveHome}
+	path := s.resolvedLivePath()
+	if path == "" {
+		return empty
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return empty
+	}
+	var state codexLiveState
+	if json.Unmarshal(raw, &state) != nil || state.Home != s.liveHome {
+		return empty
+	}
+	return state
+}
+
+func (s codexSource) writeLiveState(state codexLiveState) {
+	raw, err := json.Marshal(state)
+	if err != nil {
+		return
+	}
+	replaceStateFile(s.resolvedLivePath(), raw)
+}
+
+// codexLiveResult is what the live side contributes to one fetch: a row to
+// weigh against the log's, if there is any reading at all, and why a read
+// attempted this time failed, if it did.
+type codexLiveResult struct {
+	row    *codexRow
+	detail string
+	err    error
+}
+
+// live produces the live candidate. Only a read that is due and allowed
+// starts app-server; otherwise the last good reading is offered as it
+// stands, at the time it was fetched, so it never looks fresher than it is.
+func (s codexSource) live() codexLiveResult {
+	if s.liveHome == "" {
+		return codexLiveResult{}
+	}
+	now := time.Now()
+	state := s.readLiveState()
+	result := codexLiveResult{detail: "codex app-server (" + s.liveHome + ")"}
+	offer := func() codexLiveResult {
+		if state.RateLimits != nil && state.FetchedAt > 0 {
+			row := codexLiveRow(*state.RateLimits, time.Unix(int64(state.FetchedAt), 0))
+			result.row = &row
+		}
+		return result
+	}
+	// A stamp in the future (a clock stepped back) does not hold reads off.
+	if age := now.Sub(time.Unix(int64(state.AttemptedAt), 0)); state.AttemptedAt > 0 && age >= 0 && age < codexLiveTTL {
+		return offer()
+	}
+	if !codexTokenUsable(s.liveHome, now) {
+		return offer()
+	}
+	argv := s.liveCommand
+	if argv == nil {
+		var err error
+		if argv, err = codexLiveCommand(); err != nil {
+			return offer()
+		}
+	}
+	// Claimed before the spawn, so another process arriving meanwhile waits
+	// out the TTL instead of starting its own. No lock: a rare duplicate
+	// read is harmless, since the token gate already rules out a refresh.
+	state.AttemptedAt = float64(now.Unix())
+	s.writeLiveState(state)
+	timeout := s.liveTimeout
+	if timeout <= 0 {
+		timeout = codexLiveTimeout
+	}
+	limits, err := readCodexLive(argv, s.liveHome, timeout)
+	if err != nil {
+		result.err = err
+		return offer()
+	}
+	state.FetchedAt = float64(now.Unix())
+	state.RateLimits = &limits
+	s.writeLiveState(state)
+	return offer()
+}

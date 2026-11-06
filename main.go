@@ -136,7 +136,7 @@ func codexSourceStates() []sourceState {
 		// directory the pattern matches can appear after startup, and a
 		// value parsed once at construction would never see it.
 		states = append(states, sourceState{fetch: func(bool) Snapshot {
-			return codexSource{extraRoots: parseCodexRoots(raw), account: label}.fetch()
+			return namedCodexSource(label, raw).fetch()
 		}})
 	}
 	return states

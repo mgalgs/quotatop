@@ -286,7 +286,7 @@ func (s claudeSource) writeBackoff(until time.Time) {
 	if err != nil {
 		return
 	}
-	s.writeStateFile(s.resolvedBackoffPath(), raw)
+	replaceStateFile(s.resolvedBackoffPath(), raw)
 }
 
 func (s claudeSource) clearBackoff() {
@@ -372,12 +372,13 @@ func (s claudeSource) writeCache(payload claudePayload, fetchedAt time.Time) {
 	if err != nil {
 		return
 	}
-	s.writeStateFile(s.resolvedCachePath(), raw)
+	replaceStateFile(s.resolvedCachePath(), raw)
 }
 
-// writeStateFile atomically replaces target with raw, mode 0600. "" is a
+// replaceStateFile atomically replaces target with raw, mode 0600. "" is a
 // no-op, and every failure is silent: state files are an optimisation.
-func (s claudeSource) writeStateFile(target string, raw []byte) {
+// Shared by the Claude cache and backoff and the Codex live-read state.
+func replaceStateFile(target string, raw []byte) {
 	if target == "" {
 		return
 	}
@@ -385,7 +386,7 @@ func (s claudeSource) writeStateFile(target string, raw []byte) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return
 	}
-	tmp, err := os.CreateTemp(dir, ".claude-quota-*.tmp")
+	tmp, err := os.CreateTemp(dir, ".quotatop-*.tmp")
 	if err != nil {
 		return
 	}
@@ -618,14 +619,21 @@ type codexRow struct {
 	} `json:"payload"`
 }
 
-// codexSource walks Codex session logs. The roots are injectable so tests
-// point at their own temp directories and never the real ~/.codex.
+// codexSource walks Codex session logs and, when it has a liveHome, asks
+// codex app-server for the live limits too. The roots, the home, the cache
+// directory and the app-server command are injectable so tests point at
+// their own temp directories and a fake, never the real ~/.codex, the real
+// cache or PATH's codex.
 type codexSource struct {
 	defaultRoot string        // $CODEX_HOME (or ~/.codex) plus /sessions; kind "interactive"
 	extraRoots  []string      // QUOTATOP_CODEX_ROOTS glob matches; kind "extra"
 	timeout     time.Duration // bounds the walk; zero uses codexScanTimeout
 	blockScan   func()        // test hook: run at the top of the scan, may block
 	account     string        // "" unless multi-account configuration names this source
+	liveHome    string        // CODEX_HOME to live-read; "" means log scan only
+	cacheDir    string        // where the live-read state file lives; "" disables it
+	liveCommand []string      // app-server argv; nil looks up codex on PATH
+	liveTimeout time.Duration // bounds one live read; zero uses codexLiveTimeout
 }
 
 // codexScanTimeout bounds the walk. The scan runs in-process now, so an
@@ -650,9 +658,10 @@ const codexScanTimeout = 25 * time.Second
 // window is not structurally impossible, just not one this scanner has seen.
 const codexReachedStaleAfter = 168 * time.Hour
 
-// defaultCodexSource works out the roots from the environment.
+// defaultCodexSource works out the roots from the environment. The home it
+// derives the session root from is also the one it live-reads.
 func defaultCodexSource() codexSource {
-	var source codexSource
+	source := codexSource{cacheDir: quotatopCacheDir()}
 	home := os.Getenv("CODEX_HOME")
 	if home == "" {
 		if dir, err := os.UserHomeDir(); err == nil {
@@ -661,9 +670,37 @@ func defaultCodexSource() codexSource {
 	}
 	if home != "" {
 		source.defaultRoot = filepath.Join(home, "sessions")
+		if codexLiveEnabled() {
+			source.liveHome = home
+		}
 	}
 	source.extraRoots = parseCodexRoots(setting("QUOTATOP_CODEX_ROOTS"))
 	return source
+}
+
+// namedCodexSource is the source for one QUOTATOP_CODEX_ACCOUNT_<label>:
+// raw is its glob list. It is log-only unless QUOTATOP_CODEX_HOME_<label>
+// names that account's CODEX_HOME, since nothing else says which login the
+// account's logs belong to.
+func namedCodexSource(label, raw string) codexSource {
+	source := codexSource{extraRoots: parseCodexRoots(raw), account: label, cacheDir: quotatopCacheDir()}
+	if home := settingsWithPrefix("QUOTATOP_CODEX_HOME_")[label]; home != "" && codexLiveEnabled() {
+		source.liveHome = home
+	}
+	return source
+}
+
+// codexLiveEnabled is QUOTATOP_CODEX_LIVE: "off" turns live reads off
+// everywhere; anything else, or unset, leaves them on.
+func codexLiveEnabled() bool { return setting("QUOTATOP_CODEX_LIVE") != "off" }
+
+// quotatopCacheDir is ~/.cache/quotatop, the directory the Claude cache
+// lives in; "" when the home directory is unknown.
+func quotatopCacheDir() string {
+	if home, err := os.UserHomeDir(); err == nil {
+		return filepath.Join(home, ".cache", "quotatop")
+	}
+	return ""
 }
 
 // parseCodexRoots parses a ':'-separated list of glob patterns, each match
@@ -697,8 +734,8 @@ func parseCodexRoots(raw string) []string {
 	return roots
 }
 
-// fetchCodex reads the local session logs directly. There is no server to
-// ask: Codex only records its limits when it reports them.
+// fetchCodex reads the local session logs and, every codexLiveTTL at most,
+// the live limits from codex app-server; the newest reading wins.
 func fetchCodex() Snapshot { return defaultCodexSource().fetch() }
 
 // codexReport is the newest usage row seen so far and where it came from.
@@ -776,10 +813,8 @@ func (r *codexReport) consider(row codexRow, path, root string) {
 	}
 }
 
-// scan runs the root walk and fills snap with the result.
-func (s codexSource) scan() (snap Snapshot) {
-	snap = Snapshot{Source: "codex", Account: s.account, Title: panelTitle("CODEX", s.account), Verb: "reported", At: time.Now(),
-		Footnote: "local"}
+// scan runs the root walk and returns the newest usage report it found.
+func (s codexSource) scan() codexReport {
 	if s.blockScan != nil {
 		s.blockScan()
 	}
@@ -801,23 +836,40 @@ func (s codexSource) scan() (snap Snapshot) {
 		}
 		s.scanFile(log.path, log.kind, &report)
 	}
+	return report
+}
+
+// snapshot turns the merged report into the panel. liveErr is why a live
+// read attempted this time failed, if it did; it only surfaces when there is
+// no reading at all.
+func (s codexSource) snapshot(report codexReport, liveErr error) (snap Snapshot) {
+	snap = Snapshot{Source: "codex", Account: s.account, Title: panelTitle("CODEX", s.account), Verb: "reported", At: time.Now(),
+		Footnote: "local"}
 	if report.path == "" {
+		reasons := []string{"no Codex usage reports found"}
 		if report.scanErr != nil {
-			snap.Err = fmt.Errorf("no Codex usage reports found; %s", report.scanErr)
-		} else {
-			snap.Err = errors.New("no Codex usage reports found")
+			reasons = append(reasons, report.scanErr.Error())
 		}
+		if liveErr != nil {
+			reasons = append(reasons, liveErr.Error())
+		}
+		snap.Err = errors.New(strings.Join(reasons, "; "))
 		return snap
 	}
 	snap.Observed = report.timestamp
 	snap.Chip = report.planType
-	snap.Footnote = "local · " + report.root
+	if report.root == "live" {
+		snap.Verb = "fetched"
+		snap.Footnote = "live"
+	} else {
+		snap.Footnote = "local · " + report.root
+	}
 	// The cut-off warning is about the whole scan, so it rides on the
 	// panel-level Warning, rendered once under the windows. Window.Note was
 	// the wrong channel: it renders under every bar, and the "reset time has
 	// passed" note -- which fires exactly when the newest readable row is an
 	// old one, i.e. when a cut-off log is most likely -- would swallow it.
-	if report.scanErr != nil {
+	if report.scanErr != nil && report.root != "live" {
 		snap.Warning = "a log is cut off; the reading may be stale"
 	}
 	snap.Detail = report.path
@@ -886,15 +938,34 @@ func (s codexSource) fetch() Snapshot {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
-	done := make(chan Snapshot, 1)
+	// The live read runs beside the walk; it is bounded by its own, shorter
+	// timeout, so waiting for it below never outlasts the walk's bound.
+	live := make(chan codexLiveResult, 1)
+	go func() { live <- s.live() }()
+	done := make(chan codexReport, 1)
 	go func() { done <- s.scan() }()
+	var report codexReport
+	timedOut := false
 	select {
-	case snap := <-done:
-		return snap
+	case report = <-done:
 	case <-ctx.Done():
+		timedOut = true
+	}
+	// The live reading is one more candidate row, weighed by the same rules
+	// as every log row; it is not a second copy of them.
+	liveResult := <-live
+	if liveResult.row != nil {
+		report.consider(*liveResult.row, liveResult.detail, "live")
+	}
+	if timedOut && report.path == "" {
 		return Snapshot{Source: "codex", Account: s.account, Title: panelTitle("CODEX", s.account), At: time.Now(),
 			Err: errors.New("Codex log scan timed out")}
 	}
+	snap := s.snapshot(report, liveResult.err)
+	if timedOut {
+		snap.Warning = "Codex log scan timed out; showing the live reading"
+	}
+	return snap
 }
 
 // codexLog is one session log found by the walk, not yet read.
